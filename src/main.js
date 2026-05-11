@@ -353,6 +353,12 @@ function checkoutPage() {
         ${certHtml}
       </div>
       <div class="co-right">
+        <div class="co-card" style="border: 1px solid rgba(168, 85, 247, 0.3); background: rgba(168, 85, 247, 0.05);">
+          <h3 style="color: #a855f7;">⚠️ PLEASE NOTE</h3>
+          <p style="font-size: 13px; color: hsla(var(--foreground)/.7); line-height: 1.5; margin-top: 8px;">
+            We provide pre-activated premium accounts (shared or private). We do <strong>NOT</strong> upgrade your existing personal email accounts.
+          </p>
+        </div>
         <div class="co-card co-steps"><h3>📋 How to Complete Your Order</h3>
           <div class="co-step"><span class="co-step-num">1</span><div><strong>Review Order</strong><p>Verify your cart items.</p></div></div>
           <div class="co-step"><span class="co-step-num">2</span><div><strong>Send to Telegram</strong><p>Click the button below to send your order details securely.</p></div></div>
@@ -653,12 +659,10 @@ document.addEventListener('click', e => {
 
     const msg = `🛒 NEW ORDER — SoftBazzar\n━━━━━━━━━━━━━━━━━━━━\n📦 Items:\n${lines.join('\n')}\n━━━━━━━━━━━━━━━━━━━━\n💰 Total: ₹${getCartTotal().toLocaleString('en-IN')}${certData}\n\n━━━━━━━━━━━━━━━━━━━━\n📌 PLEASE PROVIDE PAYMENT DETAILS.`;
     
-    if (confirm("Order details saved. We will now redirect you to Telegram where our agent will assist you with payment and delivery. Proceed?")) {
-      window.open(`https://t.me/softbazzar?text=${encodeURIComponent(msg)}`, '_blank');
-      cart = []; saveCart(); updateCartBadge();
-      window.location.hash = '';
-      showToast('Order sent!');
-    }
+    window.open(`https://t.me/softbazzar?text=${encodeURIComponent(msg)}`, '_blank');
+    cart = []; saveCart(); updateCartBadge();
+    window.location.hash = '';
+    showToast('Order sent!');
     return;
   }
 
