@@ -1,4 +1,6 @@
 import './index.css';
+import { inject } from '@vercel/analytics';
+inject();
 import logoUrl from './assets/logo.png';
 import { brandIcons, products, categories } from './data.js';
 import { privacyPage, termsPage, TELEGRAM } from './pages.js';
