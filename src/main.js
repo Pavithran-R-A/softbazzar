@@ -349,16 +349,12 @@ function checkoutPage() {
       <div class="co-left">
         <div class="co-card"><h3>📦 Order Summary</h3><div class="co-items">${itemsHtml}</div>
           <div class="co-total-row"><span>Total</span><span class="co-total">₹${getCartTotal().toLocaleString('en-IN')}</span></div></div>
-        <div class="co-card"><h3>📞 Your Contact</h3>
-          <p class="co-hint">We'll deliver your product via Telegram or email</p>
-          <input type="email" id="coEmail" class="co-input" placeholder="Enter your Email Address" style="margin-bottom:12px;" required />
-          <input type="tel" id="coPhone" class="co-input" placeholder="Enter your Phone Number" required />
-        </div>
+
         ${certHtml}
       </div>
       <div class="co-right">
         <div class="co-card co-steps"><h3>📋 How to Complete Your Order</h3>
-          <div class="co-step"><span class="co-step-num">1</span><div><strong>Review Order</strong><p>Verify your cart items and contact details.</p></div></div>
+          <div class="co-step"><span class="co-step-num">1</span><div><strong>Review Order</strong><p>Verify your cart items.</p></div></div>
           <div class="co-step"><span class="co-step-num">2</span><div><strong>Send to Telegram</strong><p>Click the button below to send your order details securely.</p></div></div>
           <div class="co-step"><span class="co-step-num">3</span><div><strong>Complete Payment</strong><p>Our agent will provide payment details and deliver your product within 10 mins - 16 hours.</p></div></div>
         </div>
@@ -626,22 +622,6 @@ document.addEventListener('click', e => {
   // Checkout: send order to Telegram
   const sendBtn = e.target.closest('#coSendOrder');
   if (sendBtn) {
-    const emailEl = document.getElementById('coEmail');
-    const phoneEl = document.getElementById('coPhone');
-    const email = emailEl?.value?.trim();
-    const phone = phoneEl?.value?.trim();
-    
-    if (!email || !phone) { showToast('Email and Phone are required!'); return; }
-
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) { showToast('Please enter a valid email address.'); emailEl.focus(); return; }
-    
-    const phoneRegex = /^[0-9+ \-()]{10,15}$/;
-    if (!phoneRegex.test(phone)) { showToast('Please enter a valid phone number.'); phoneEl.focus(); return; }
-
-    const tempDomains = ['mailinator.com', 'guerrillamail.com', '10minutemail.com', 'temp-mail.org', 'yopmail.com', 'mail.tm', 'dispostable.com', 'throwawaymail.com', 'tempmail.net', 'sharklasers.com', 'guerrillamail.biz'];
-    const domain = email.split('@')[1]?.toLowerCase();
-    if (tempDomains.some(d => domain.includes(d))) { showToast('Temporary emails are not allowed.'); emailEl.focus(); return; }
 
     const hasCert = cart.some(item => item.id === 'infosys' || item.id === 'jpmorgan');
     let certData = '';
@@ -667,13 +647,11 @@ document.addEventListener('click', e => {
       id: Math.random().toString(36).substr(2, 9).toUpperCase(),
       date: new Date().toISOString(),
       items: lines.join('<br/>') + (certData ? `<br/><br/><i>${sanitizeHTML(certData.replace('\n🎓 ','').trim())}</i>` : ''),
-      total: getCartTotal().toLocaleString('en-IN'),
-      email: sanitizeHTML(email),
-      phone: sanitizeHTML(phone)
+      total: getCartTotal().toLocaleString('en-IN')
     });
     localStorage.setItem('sb_admin_orders', JSON.stringify(adminOrders));
 
-    const msg = `🛒 NEW ORDER — SoftBazzar\n━━━━━━━━━━━━━━━━━━━━\n📦 Items:\n${lines.join('\n')}\n━━━━━━━━━━━━━━━━━━━━\n💰 Total: ₹${getCartTotal().toLocaleString('en-IN')}\n👤 Email: ${email}\n📞 Phone: ${phone}${certData}\n\n━━━━━━━━━━━━━━━━━━━━\n📌 PLEASE PROVIDE PAYMENT DETAILS.`;
+    const msg = `🛒 NEW ORDER — SoftBazzar\n━━━━━━━━━━━━━━━━━━━━\n📦 Items:\n${lines.join('\n')}\n━━━━━━━━━━━━━━━━━━━━\n💰 Total: ₹${getCartTotal().toLocaleString('en-IN')}${certData}\n\n━━━━━━━━━━━━━━━━━━━━\n📌 PLEASE PROVIDE PAYMENT DETAILS.`;
     
     if (confirm("Order details saved. We will now redirect you to Telegram where our agent will assist you with payment and delivery. Proceed?")) {
       window.open(`https://t.me/softbazzar?text=${encodeURIComponent(msg)}`, '_blank');
