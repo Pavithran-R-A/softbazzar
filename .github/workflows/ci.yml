@@ -19,7 +19,9 @@ jobs:
           node-version: "22"
           cache: "npm"
       - name: Install dependencies
-        run: npm ci
+        run: npm install
+      - name: High-severity dependency audit
+        run: npm audit --audit-level=high
       - name: Tests
         run: npm test
       - name: Production build
