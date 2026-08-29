@@ -13,9 +13,6 @@
     "vite": "^8.0.10"
   },
   "dependencies": {
-    "@vercel/analytics": "^2.0.1",
-    "jimp": "^0.16.1",
-    "node-fetch": "^3.3.2",
-    "sharp": "^0.34.5"
+    "@vercel/analytics": "^2.0.1"
   }
 }
