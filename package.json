@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "test": "node --experimental-loader ./tests/asset-loader.mjs --test",
-    "build": "vite build && node scripts/generate-seo.mjs",
+    "test": "node --experimental-loader ./scripts/asset-loader.mjs --test",
+    "build": "vite build && node --experimental-loader ./scripts/asset-loader.mjs scripts/generate-seo.mjs",
     "preview": "vite preview"
   },
   "devDependencies": {
