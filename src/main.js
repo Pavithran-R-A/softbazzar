@@ -3,35 +3,10 @@ import { inject } from '@vercel/analytics';
 inject();
 import logoUrl from './assets/logo.png';
 import { brandIcons, products, categories } from './data.js';
+import { calculateCartTotal, normalizeStoredCart, readStoredCart, resolveCartItems, resolveSelection, writeStoredCart } from './cart-model.js';
 import { privacyPage, termsPage, TELEGRAM } from './pages.js';
 
 const sanitizeHTML = (str) => typeof str === 'string' ? str.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&#39;"}[m])) : str;
-
-// === ADMIN OVERRIDES ===
-try {
-  const adminData = JSON.parse(localStorage.getItem('sb_admin_data') || '{}');
-  products.forEach(p => {
-    if (adminData[p.id]) {
-      if (adminData[p.id].inStock !== undefined) p.inStock = adminData[p.id].inStock;
-      if (adminData[p.id].price) p.price = adminData[p.id].price;
-      if (adminData[p.id].priceNum) p.priceNum = adminData[p.id].priceNum;
-      if (adminData[p.id].variantPrices && p.variants) {
-        p.variants.forEach(v => {
-          if (adminData[p.id].variantPrices[v.name]) {
-            v.price = adminData[p.id].variantPrices[v.name].price;
-            v.priceNum = adminData[p.id].variantPrices[v.name].priceNum;
-          }
-        });
-      }
-      if (adminData[p.id].disabledVariants && p.variants) {
-        p.variants.forEach(v => {
-          if (adminData[p.id].disabledVariants.includes(v.name)) v.disabled = true;
-        });
-      }
-    }
-  });
-} catch(e) {}
-
 
 const chevronSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clip-rule="evenodd"/></svg>`;
 const cartSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 002 1.61h9.72a2 2 0 002-1.61L23 6H6"/></svg>`;
@@ -43,50 +18,56 @@ const trashSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" str
 const VIDEO_URL = 'https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260328_065045_c44942da-53c6-4804-b734-f9e07fc22e08.mp4';
 
 // === CART STATE ===
-let cart = [];
-try { cart = JSON.parse(localStorage.getItem('sb_cart_v2') || '[]'); } catch(e){}
-function saveCart() { localStorage.setItem('sb_cart_v2', JSON.stringify(cart)); }
-function addToCart(id, vName = null, vPrice = null, vPriceNum = null) {
-  const p = products.find(x => x.id === id);
-  if (!p) return;
-  const name = vName || p.name;
-  const pr = vPrice || p.price;
-  const prn = vPriceNum || p.priceNum;
-  
-  const existing = cart.find(x => x.id === id && x.vName === name);
+let cart = readStoredCart();
+
+function saveCart() {
+  cart = normalizeStoredCart(cart);
+  writeStoredCart(cart);
+}
+
+function addToCart(id, variantName = null) {
+  const selection = resolveSelection(id, variantName || null);
+  if (!selection) return;
+  const existing = cart.find(item => item.id === selection.id && item.variantName === selection.variantName);
   if (existing) {
-    existing.qty = (existing.qty || 1) + 1;
+    existing.qty = Math.min(99, (existing.qty || 1) + 1);
     showToast('Increased quantity!');
   } else {
-    cart.push({ id, vName: name, vPrice: pr, vPriceNum: prn, icon: p.icon, cat: p.cat, color: p.color, qty: 1 });
+    cart.push({ id: selection.id, variantName: selection.variantName, qty: 1 });
     showToast('Added to cart!');
   }
   saveCart();
   updateCartBadge();
   if (document.querySelector('.cart-drawer.open')) renderCartItems();
 }
-function removeFromCart(id, vName) {
-  cart = cart.filter(x => !(x.id === id && x.vName === vName));
+
+function removeFromCart(id, variantName) {
+  const normalizedVariant = variantName || null;
+  cart = cart.filter(item => !(item.id === id && item.variantName === normalizedVariant));
   saveCart();
   updateCartBadge();
   renderCartItems();
 }
-function updateQuantity(id, vName, delta) {
-  const item = cart.find(x => x.id === id && x.vName === vName);
+
+function updateQuantity(id, variantName, delta) {
+  const normalizedVariant = variantName || null;
+  const item = cart.find(entry => entry.id === id && entry.variantName === normalizedVariant);
   if (!item) return;
   item.qty = (item.qty || 1) + delta;
   if (item.qty <= 0) {
-    removeFromCart(id, vName);
+    removeFromCart(id, normalizedVariant);
     return;
   }
   saveCart();
   updateCartBadge();
   renderCartItems();
-  if (location.hash === '#checkout') render();
+  if (window.location.pathname === '/checkout') render();
 }
+
 function getCartTotal() {
-  return cart.reduce((t, item) => t + (item.vPriceNum * (item.qty || 1)), 0);
+  return calculateCartTotal(cart);
 }
+
 function updateCartBadge() {
   document.querySelectorAll('.cart-badge').forEach(b => {
     b.textContent = cart.length || '';
@@ -115,21 +96,23 @@ function renderCartItems() {
   const el = document.querySelector('.cart-items');
   const ft = document.querySelector('.cart-footer');
   if (!el) return;
-  if (cart.length === 0) {
+  const resolvedItems = resolveCartItems(cart);
+  if (resolvedItems.length === 0) {
     el.innerHTML = `<div class="cart-empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 002 1.61h9.72a2 2 0 002-1.61L23 6H6"/></svg><p>Your cart is empty</p></div>`;
     if (ft) ft.style.display = 'none';
     return;
   }
   if (ft) ft.style.display = '';
-  el.innerHTML = cart.map((item, i) => {
-    return `<div class="cart-item" style="animation-delay:${i*0.05}s"><div class="cart-item-icon" style="background:${item.color}15">${brandIcons[item.icon]||''}</div><div class="cart-item-info"><div class="cart-item-name">${item.vName}</div><div class="cart-item-cat">${item.cat}</div></div>
-    <div class="cart-qty-ctrl"><button class="cart-qty-btn ripple-btn" data-qty-sub="${item.id}" data-qty-name="${item.vName}">-</button><span class="cart-qty-val">${item.qty||1}</span><button class="cart-qty-btn ripple-btn" data-qty-add="${item.id}" data-qty-name="${item.vName}">+</button></div>
-    <div class="cart-item-price">₹${(item.vPriceNum * (item.qty||1)).toLocaleString('en-IN')}</div><button class="cart-remove ripple-btn" data-remove-id="${item.id}" data-remove-name="${item.vName}">${trashSvg}</button></div>`;
+  el.innerHTML = resolvedItems.map((item, i) => {
+    const variantKey = item.variantName || '';
+    return `<div class="cart-item" style="animation-delay:${i*0.05}s"><div class="cart-item-icon" style="background:${item.color}15">${brandIcons[item.icon]||''}</div><div class="cart-item-info"><div class="cart-item-name">${item.displayName}</div><div class="cart-item-cat">${item.cat}</div></div>
+    <div class="cart-qty-ctrl"><button class="cart-qty-btn ripple-btn" data-qty-sub="${item.id}" data-qty-name="${variantKey}">-</button><span class="cart-qty-val">${item.qty||1}</span><button class="cart-qty-btn ripple-btn" data-qty-add="${item.id}" data-qty-name="${variantKey}">+</button></div>
+    <div class="cart-item-price">₹${item.lineTotal.toLocaleString('en-IN')}</div><button class="cart-remove ripple-btn" data-remove-id="${item.id}" data-remove-name="${variantKey}">${trashSvg}</button></div>`;
   }).join('');
   const totalEl = document.querySelector('.cart-total-amount');
   const countEl = document.querySelector('.cart-header .cart-count');
   if (totalEl) totalEl.textContent = `₹${getCartTotal().toLocaleString('en-IN')}`;
-  if (countEl) countEl.textContent = `(${cart.reduce((sum, item) => sum + (item.qty || 1), 0)})`;
+  if (countEl) countEl.textContent = `(${resolvedItems.reduce((sum, item) => sum + (item.qty || 1), 0)})`;
 }
 
 const marqueeKeys = ['chatgpt','perplexity','gemini','envato','windsurf','microsoft'];
@@ -165,7 +148,7 @@ function chipHTML() { return categories.map(c => `<button class="chip ripple-btn
 
 function navbar() {
   return `<nav class="navbar" id="navbar">
-    <a href="#" class="nav-logo" data-home><img src="${logoUrl}" alt="SoftBazzar"/></a>
+    <a href="/" class="nav-logo" data-home><img src="${logoUrl}" alt="SoftBazzar"/></a>
     <div class="nav-center">
       <button class="nav-item" data-scroll="products">Products ${chevronSvg}</button>
       <button class="nav-item" data-scroll="how-it-works">How It Works</button>
@@ -185,7 +168,7 @@ function cartDrawer() {
     <div class="cart-header"><h2>Your Cart <span class="cart-count">(${cart.length})</span></h2><button class="cart-close ripple-btn" id="cartClose">${closeSvg}</button></div>
     <div class="cart-items"></div>
     <div class="cart-footer"><div class="cart-total"><span class="cart-total-label">Total</span><span class="cart-total-amount">₹${getCartTotal()}</span></div>
-    <a href="#checkout" class="cart-checkout ripple-btn">${telegramSvg} Proceed to Checkout</a>
+    <a href="/checkout" data-route class="cart-checkout ripple-btn">${telegramSvg} Proceed to Checkout</a>
     <p class="cart-telegram-note">Secure payment via UPI or Crypto</p></div>
   </div>`;
 }
@@ -202,12 +185,12 @@ function footer() {
       <li><a href="#" data-filter="Design Resources">Design Resources</a></li><li><a href="#" data-filter="Social Media Growth">Social Media Growth</a></li>
     </ul></div>
     <div class="footer-col"><h4>Popular</h4><ul>
-      <li><a href="#product/chatgpt-plus">ChatGPT Plus</a></li><li><a href="#product/perplexity-pro">Perplexity Pro</a></li>
-      <li><a href="#product/canva-pro">Canva Pro</a></li><li><a href="#product/envato">Envato Elements</a></li>
-      <li><a href="#product/reels-views">1M Reels Views</a></li>
+      <li><a href="/product/chatgpt-plus" data-route>ChatGPT Plus</a></li><li><a href="/product/perplexity-pro" data-route>Perplexity Pro</a></li>
+      <li><a href="/product/canva-pro" data-route>Canva Pro</a></li><li><a href="/product/envato" data-route>Envato Elements</a></li>
+      <li><a href="/product/reels-views" data-route>1M Reels Views</a></li>
     </ul></div>
     <div class="footer-col"><h4>Legal</h4><ul>
-      <li><a href="#privacy">Privacy Policy</a></li><li><a href="#terms">Terms & Conditions</a></li>
+      <li><a href="/privacy" data-route>Privacy Policy</a></li><li><a href="/terms" data-route>Terms & Conditions</a></li>
       <li><a href="${TELEGRAM}" target="_blank">Refund Policy</a></li><li><a href="${TELEGRAM}" target="_blank">Report an Issue</a></li>
     </ul></div>
     <div class="footer-col"><h4>Support</h4><ul>
@@ -318,11 +301,10 @@ function checkoutPage() {
       <button class="btn-cta ripple-btn" data-home><span>Browse Products</span></button>
     </div></div>`;
   }
-  const itemsHtml = cart.map(item => {
-    const p = products.find(x => x.id === item.id);
+  const itemsHtml = resolveCartItems(cart).map(item => {
     return `<div class="co-item"><div class="co-item-icon" style="background:${item.color}15">${brandIcons[item.icon]||''}</div>
-      <div class="co-item-info"><span class="co-item-name">${p ? p.name : item.vName}</span><span class="co-item-variant">${item.vName}</span><span class="co-item-qty">Qty: ${item.qty||1}</span></div>
-      <span class="co-item-price">₹${(item.vPriceNum * (item.qty||1)).toLocaleString('en-IN')}</span></div>`;
+      <div class="co-item-info"><span class="co-item-name">${item.productName}</span><span class="co-item-variant">${item.displayName}</span><span class="co-item-qty">Qty: ${item.qty||1}</span></div>
+      <span class="co-item-price">₹${item.lineTotal.toLocaleString('en-IN')}</span></div>`;
   }).join('');
 
   const orderLines = cart.map(item => {
@@ -372,82 +354,31 @@ function checkoutPage() {
   </div></div>`;
 }
 
-function adminPage() {
-  const adminData = JSON.parse(localStorage.getItem('sb_admin_data') || '{}');
-  const orders = JSON.parse(localStorage.getItem('sb_admin_orders') || '[]');
-  
-  const productRows = products.map(p => {
-    const isStock = p.inStock !== false;
-    const defaultPrice = p.price || (p.variants ? p.variants[0].price : 'N/A');
-    
-    let variantToggles = '';
-    if (p.variants && p.variants.length > 0) {
-      variantToggles = `<div style="margin-top:12px;padding-top:12px;border-top:1px dashed rgba(255,255,255,0.1);display:flex;flex-direction:column;gap:8px;">` + 
-        p.variants.map(v => {
-          const isVStock = !v.disabled;
-          return `<div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;color:hsla(var(--foreground)/.7);padding-left:12px;">
-            <span>${v.name}</span>
-            <div style="display:flex;align-items:center;gap:12px;">
-              <input type="text" class="admin-input" placeholder="Price" value="${v.price}" data-edit-variant-price="${p.id}" data-vname="${v.name}" style="width:80px;padding:4px 8px;" />
-              <div class="toggle-switch ${isVStock ? 'active' : ''}" data-toggle-variant="${p.id}" data-vname="${v.name}" style="transform:scale(0.8);transform-origin:right center;"></div>
-            </div>
-          </div>`;
-        }).join('') + `</div>`;
-    }
-
-    return `<div class="admin-row" style="display:block;">
-      <div style="display:flex;align-items:center;justify-content:space-between;">
-        <div class="admin-col-info"><div class="admin-col-icon" style="width:40px;height:40px;background:rgba(255,255,255,.05);border-radius:8px;display:flex;align-items:center;justify-content:center;">${getIcon(p.icon)}</div>
-        <div><div style="font-family:var(--font-headline);font-weight:600;font-size:14px;">${p.name}</div><div style="font-size:12px;color:hsla(var(--foreground)/.5);">${p.cat}</div></div></div>
-        <div class="admin-col-actions">
-          <input type="text" class="admin-input" placeholder="Price" value="${defaultPrice}" data-edit-price="${p.id}" />
-          <div class="toggle-switch ${isStock ? 'active' : ''}" data-toggle-stock="${p.id}"></div>
-        </div>
-      </div>
-      ${variantToggles}
-    </div>`;
-  }).join('');
-
-  const ordersHtml = orders.length === 0 ? `<div style="text-align:center;color:hsla(var(--foreground)/.5);padding:40px;">No orders yet.</div>` : orders.map(o => {
-    return `<div class="admin-order-item">
-      <div class="admin-order-header"><span>Order #${o.id.substring(0,8)}</span><span>${new Date(o.date).toLocaleString()}</span></div>
-      <div class="admin-order-items">${o.items}</div>
-      <div style="margin-bottom:8px;">Total: <strong style="color:var(--purple);">₹${o.total}</strong></div>
-      <div class="admin-order-contact">Email: ${o.email} | Phone: ${o.phone}</div>
-    </div>`;
-  }).join('');
-
-  return `<div class="admin-page page-transition">
-    <div class="admin-header"><h1>Dashboard</h1><button class="btn-signup ripple-btn" data-home>${backSvg} Back to Store</button></div>
-    <div class="admin-tabs"><button class="admin-tab active" data-atab="products">Products & Stock</button><button class="admin-tab" data-atab="orders">Orders</button></div>
-    <div class="admin-content" id="acProducts"><div class="admin-card">${productRows}</div></div>
-    <div class="admin-content" id="acOrders" style="display:none;">${ordersHtml}</div>
-  </div>`;
+// === ROUTER ===
+function navigate(path, replace = false) {
+  const target = path || '/';
+  if (replace) history.replaceState({}, '', target);
+  else if (window.location.pathname !== target) history.pushState({}, '', target);
+  render();
 }
 
-// === ROUTER ===
 function render() {
-  const hash = window.location.hash.slice(1);
+  const pathname = window.location.pathname.replace(/\/+$/, '') || '/';
   const app = document.querySelector('#app');
-  if (hash.startsWith('product/')) { app.innerHTML = detailPage(hash.replace('product/','')); }
-  else if (hash === 'checkout') { app.innerHTML = `${navbar()}${checkoutPage()}${footer()}${cartDrawer()}`; }
-  else if (hash === 'admin') { 
-    if (sessionStorage.getItem('sb_admin_auth') !== 'true') {
-      const p = prompt('Enter Admin Password:');
-      if (btoa(p) === 'c2JhZG1pbjIwMjY=') {
-        sessionStorage.setItem('sb_admin_auth', 'true');
-        app.innerHTML = adminPage();
-      } else {
-        alert('Access Denied');
-        window.location.hash = '';
-      }
-    } else {
-      app.innerHTML = adminPage();
-    }
+  if (pathname.startsWith('/product/')) {
+    const id = decodeURIComponent(pathname.slice('/product/'.length));
+    app.innerHTML = detailPage(id);
+  } else if (pathname === '/checkout') {
+    app.innerHTML = `${navbar()}${checkoutPage()}${footer()}${cartDrawer()}`;
+  } else if (pathname === '/privacy') {
+    app.innerHTML = `${navbar()}<div class="section-inner" style="padding-top:100px;"><button class="detail-back ripple-btn" data-home style="margin-bottom:20px;">${backSvg} Back to Store</button>${privacyPage()}</div>${footer()}${cartDrawer()}`;
+  } else if (pathname === '/terms') {
+    app.innerHTML = `${navbar()}<div class="section-inner" style="padding-top:100px;"><button class="detail-back ripple-btn" data-home style="margin-bottom:20px;">${backSvg} Back to Store</button>${termsPage()}</div>${footer()}${cartDrawer()}`;
+  } else if (pathname === '/') {
+    app.innerHTML = homePage();
+  } else {
+    app.innerHTML = `${navbar()}<div class="section-inner" style="padding:120px 32px;text-align:center"><h1>Page not found</h1><p>The requested SoftBazzar page is not available.</p><a href="/" data-route>Back to store</a></div>${footer()}${cartDrawer()}`;
   }
-  else if (hash === 'privacy') { app.innerHTML = `${navbar()}<div class="section-inner" style="padding-top:100px;"><button class="detail-back ripple-btn" data-home style="margin-bottom:20px;">${backSvg} Back to Store</button>${privacyPage()}</div>${footer()}${cartDrawer()}`; }
-  else if (hash === 'terms') { app.innerHTML = `${navbar()}<div class="section-inner" style="padding-top:100px;"><button class="detail-back ripple-btn" data-home style="margin-bottom:20px;">${backSvg} Back to Store</button>${termsPage()}</div>${footer()}${cartDrawer()}`; }
-  else { app.innerHTML = homePage(); }
   window.scrollTo(0, 0);
   initInteractions();
   updateCartBadge();
@@ -521,6 +452,9 @@ function initInteractions() {
 
 // Global click handler
 document.addEventListener('click', e => {
+  const routeLink = e.target.closest('a[data-route]');
+  if (routeLink) { e.preventDefault(); navigate(routeLink.getAttribute('href') || '/'); return; }
+
   // Ripple effect
   const rippleBtn = e.target.closest('.ripple-btn');
   if (rippleBtn) {
@@ -559,8 +493,8 @@ document.addEventListener('click', e => {
   const detailAddBtn = e.target.closest('[data-detail-add]');
   if (detailAddBtn) {
     e.preventDefault(); e.stopPropagation();
-    const { detailAdd, vname, vprice, vpricenum } = detailAddBtn.dataset;
-    addToCart(detailAdd, vname, vprice, Number(vpricenum));
+    const { detailAdd, vname } = detailAddBtn.dataset;
+    addToCart(detailAdd, vname || null);
     return;
   }
 
@@ -571,7 +505,7 @@ document.addEventListener('click', e => {
     const p = products.find(x => x.id === addBtn.dataset.add);
     if (p && p.variants) {
       // If product has variants, just redirect to detail page
-      window.location.hash = `product/${p.id}`;
+      navigate(`/product/${encodeURIComponent(p.id)}`);
       return;
     }
     addToCart(addBtn.dataset.add);
@@ -590,11 +524,11 @@ document.addEventListener('click', e => {
 
   // Product card click
   const card = e.target.closest('.product-card');
-  if (card && !e.target.closest('[data-add]')) { window.location.hash = `product/${card.dataset.id}`; return; }
+  if (card && !e.target.closest('[data-add]')) { navigate(`/product/${encodeURIComponent(card.dataset.id)}`); return; }
   
   // Home
   const homeBtn = e.target.closest('[data-home]');
-  if (homeBtn) { e.preventDefault(); window.location.hash = ''; return; }
+  if (homeBtn) { e.preventDefault(); navigate('/'); return; }
   
   // Scroll
   const scrollBtn = e.target.closest('[data-scroll]');
@@ -603,7 +537,7 @@ document.addEventListener('click', e => {
   // Footer category filter
   const filterLink = e.target.closest('[data-filter]');
   if (filterLink) {
-    e.preventDefault(); window.location.hash = '';
+    e.preventDefault(); navigate('/');
     setTimeout(() => { document.getElementById('products')?.scrollIntoView({behavior:'smooth'});
       setTimeout(() => { document.querySelector(`.chip[data-cat="${filterLink.dataset.filter}"]`)?.click(); }, 500);
     }, 100);
@@ -644,104 +578,24 @@ document.addEventListener('click', e => {
       certData = `\n🎓 Certificate Details:\nName: ${sanitizeHTML(cName)}\nGender: ${sanitizeHTML(cGender)}\nAge: ${sanitizeHTML(cAge)}\nAddress: ${sanitizeHTML(cAddr)}`;
     }
 
-    const lines = cart.map(item => {
-      const p = products.find(x => x.id === item.id);
-      return `- ${p ? p.name : item.vName} (${item.vName}) x${item.qty||1} — ₹${(item.vPriceNum * (item.qty||1)).toLocaleString('en-IN')}`;
+    const lines = resolveCartItems(cart).map(item => {
+      const variant = item.variantName ? ` (${item.variantName})` : '';
+      return `- ${item.productName}${variant} x${item.qty||1} — ₹${item.lineTotal.toLocaleString('en-IN')}`;
     });
     
-    // Save order to admin
-    const adminOrders = JSON.parse(localStorage.getItem('sb_admin_orders') || '[]');
-    adminOrders.unshift({
-      id: Math.random().toString(36).substr(2, 9).toUpperCase(),
-      date: new Date().toISOString(),
-      items: lines.join('<br/>') + (certData ? `<br/><br/><i>${sanitizeHTML(certData.replace('\n🎓 ','').trim())}</i>` : ''),
-      total: getCartTotal().toLocaleString('en-IN')
-    });
-    localStorage.setItem('sb_admin_orders', JSON.stringify(adminOrders));
 
     const msg = `🛒 NEW ORDER — SoftBazzar\n━━━━━━━━━━━━━━━━━━━━\n📦 Items:\n${lines.join('\n')}\n━━━━━━━━━━━━━━━━━━━━\n💰 Total: ₹${getCartTotal().toLocaleString('en-IN')}${certData}\n\n━━━━━━━━━━━━━━━━━━━━\n📌 PLEASE PROVIDE PAYMENT DETAILS.`;
     
     window.open(`https://t.me/softbazzar?text=${encodeURIComponent(msg)}`, '_blank');
     cart = []; saveCart(); updateCartBadge();
-    window.location.hash = '';
-    showToast('Order sent!');
+    navigate('/');
+    showToast('Order opened in Telegram. Keep this page until the message is sent.');
     return;
   }
 
-  // Admin: Tabs
-  const atab = e.target.closest('.admin-tab');
-  if (atab) {
-    document.querySelectorAll('.admin-tab').forEach(t => t.classList.remove('active'));
-    atab.classList.add('active');
-    document.getElementById('acProducts').style.display = atab.dataset.atab === 'products' ? '' : 'none';
-    document.getElementById('acOrders').style.display = atab.dataset.atab === 'orders' ? '' : 'none';
-    return;
-  }
-
-  // Admin: Toggle Stock
-  const tStock = e.target.closest('[data-toggle-stock]');
-  if (tStock) {
-    tStock.classList.toggle('active');
-    const id = tStock.dataset.toggleStock;
-    const adminData = JSON.parse(localStorage.getItem('sb_admin_data') || '{}');
-    if (!adminData[id]) adminData[id] = {};
-    adminData[id].inStock = tStock.classList.contains('active');
-    localStorage.setItem('sb_admin_data', JSON.stringify(adminData));
-    showToast('Stock status updated');
-    return;
-  }
-
-  // Admin: Toggle Variant
-  const tVar = e.target.closest('[data-toggle-variant]');
-  if (tVar) {
-    tVar.classList.toggle('active');
-    const id = tVar.dataset.toggleVariant;
-    const vname = tVar.dataset.vname;
-    const adminData = JSON.parse(localStorage.getItem('sb_admin_data') || '{}');
-    if (!adminData[id]) adminData[id] = {};
-    if (!adminData[id].disabledVariants) adminData[id].disabledVariants = [];
-    
-    if (tVar.classList.contains('active')) {
-      adminData[id].disabledVariants = adminData[id].disabledVariants.filter(v => v !== vname);
-    } else {
-      if (!adminData[id].disabledVariants.includes(vname)) {
-        adminData[id].disabledVariants.push(vname);
-      }
-    }
-    localStorage.setItem('sb_admin_data', JSON.stringify(adminData));
-    showToast('Variant stock updated');
-    return;
-  }
 });
 
-document.addEventListener('change', e => {
-  if (e.target.matches('[data-edit-price]')) {
-    const id = e.target.dataset.editPrice;
-    const adminData = JSON.parse(localStorage.getItem('sb_admin_data') || '{}');
-    if (!adminData[id]) adminData[id] = {};
-    adminData[id].price = e.target.value;
-    adminData[id].priceNum = parseInt(e.target.value.replace(/[^0-9]/g, '')) || 0;
-    localStorage.setItem('sb_admin_data', JSON.stringify(adminData));
-    showToast('Price updated! Refresh to see changes.');
-  }
-
-  if (e.target.matches('[data-edit-variant-price]')) {
-    const id = e.target.dataset.editVariantPrice;
-    const vname = e.target.dataset.vname;
-    const adminData = JSON.parse(localStorage.getItem('sb_admin_data') || '{}');
-    if (!adminData[id]) adminData[id] = {};
-    if (!adminData[id].variantPrices) adminData[id].variantPrices = {};
-    
-    adminData[id].variantPrices[vname] = {
-      price: e.target.value,
-      priceNum: parseInt(e.target.value.replace(/[^0-9]/g, '')) || 0
-    };
-    localStorage.setItem('sb_admin_data', JSON.stringify(adminData));
-    showToast('Variant Price updated! Refresh to see changes.');
-  }
-});
-
-window.addEventListener('hashchange', render);
+window.addEventListener('popstate', render);
 render();
 
 // Spotlight and Magnetic Effect via Event Delegation
