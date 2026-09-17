@@ -29,7 +29,7 @@ function replaceMeta(html, { title, description, url, robots = 'index, follow', 
 }
 
 function replaceFallback(html, content) {
-  return html.replace(/<div id="app">[\s\S]*?<\/div>\s*<script type="module"/, `<div id="app">${content}</div>\n    <script type="module"`);
+  return html.replace(/<div id="app">[\s\S]*?<\/div>/, `<div id="app">${content}</div>`);
 }
 
 async function writeRoute(route, html) {
@@ -43,15 +43,16 @@ const websiteLd = {
   '@type': 'WebSite',
   name: 'SoftBazzar',
   url: `${origin}/`,
-  description: 'Digital tools and subscription catalogue with direct support ordering.',
+  description: 'Premium digital tools and subscription catalogue with Telegram-assisted ordering.',
 };
 
 let home = replaceMeta(baseHtml, {
   title: 'SoftBazzar — Premium AI Tools & Digital Subscriptions',
-  description: "Browse SoftBazzar's digital tools and subscription catalogue, compare current options and prices, and send an order through the configured Telegram support channel.",
+  description: "Browse SoftBazzar's premium tools and digital subscriptions, compare MRP with current sale prices, and continue ordering through Telegram.",
   url: `${origin}/`,
   jsonLd: websiteLd,
 });
+home = replaceFallback(home, '<main><h1>SoftBazzar</h1><p>Premium tools and digital subscriptions at lower prices. Compare current sale prices and available plans.</p></main>');
 await writeRoute('/', home);
 
 const legalRoutes = [
@@ -72,13 +73,41 @@ for (const page of legalRoutes) {
 
 for (const product of products.filter((entry) => entry.inStock !== false)) {
   const activeVariants = Array.isArray(product.variants) ? product.variants.filter((variant) => !variant.disabled) : [];
-  const first = activeVariants[0] ?? product;
-  const price = Number(first.priceNum ?? product.priceNum);
+  const offers = (activeVariants.length ? activeVariants : [product])
+    .map((offer) => {
+      const price = Number(offer.priceNum);
+      if (!Number.isFinite(price)) return null;
+      return {
+        '@type': 'Offer',
+        priceCurrency: 'INR',
+        price,
+        availability: 'https://schema.org/InStock',
+        url: `${origin}/product/${encodeURIComponent(product.id)}`,
+        ...(offer.name && offer !== product ? { name: offer.name } : {}),
+      };
+    })
+    .filter(Boolean);
+
   const route = `/product/${encodeURIComponent(product.id)}`;
   const url = `${origin}${route}`;
   const title = `${product.name} | SoftBazzar`;
   const description = String(product.desc || `View current ${product.name} options and pricing at SoftBazzar.`).slice(0, 155);
-  const offer = Number.isFinite(price) ? { '@type': 'Offer', priceCurrency: 'INR', price, availability: 'https://schema.org/InStock', url } : undefined;
+
+  let structuredOffers;
+  if (offers.length === 1) {
+    structuredOffers = offers[0];
+  } else if (offers.length > 1) {
+    const prices = offers.map((offer) => offer.price);
+    structuredOffers = {
+      '@type': 'AggregateOffer',
+      priceCurrency: 'INR',
+      lowPrice: Math.min(...prices),
+      highPrice: Math.max(...prices),
+      offerCount: offers.length,
+      offers,
+    };
+  }
+
   const jsonLd = {
     '@context': 'https://schema.org',
     '@type': 'Product',
@@ -86,23 +115,28 @@ for (const product of products.filter((entry) => entry.inStock !== false)) {
     description,
     category: product.cat,
     url,
-    ...(offer ? { offers: offer } : {}),
+    ...(structuredOffers ? { offers: structuredOffers } : {}),
   };
+
+  const first = activeVariants[0] ?? product;
   let html = replaceMeta(baseHtml, { title, description, url, type: 'product', jsonLd });
-  html = replaceFallback(html, `<main><p>${escapeHtml(product.cat)}</p><h1>${escapeHtml(product.name)}</h1><p>${escapeHtml(product.desc || '')}</p><p>Current option from ${escapeHtml(first.price || product.price || '')}.</p><p><a href="/">Back to SoftBazzar catalogue</a></p></main>`);
+  html = replaceFallback(
+    html,
+    `<main><p>${escapeHtml(product.cat)}</p><h1>${escapeHtml(product.name)}</h1><p>${escapeHtml(product.desc || '')}</p><p>Current option from ${escapeHtml(first.price || product.price || '')}${first.mrp ? ` (MRP ${escapeHtml(first.mrp)})` : ''}.</p><p><a href="/">Back to SoftBazzar catalogue</a></p></main>`,
+  );
   await writeRoute(route, html);
 }
 
 let checkout = replaceMeta(baseHtml, {
   title: 'Checkout | SoftBazzar',
-  description: 'Review the products saved in your SoftBazzar cart and prepare an order for the configured support channel.',
+  description: 'Review the products saved in your SoftBazzar cart and continue the order through Telegram.',
   url: `${origin}/checkout`,
   robots: 'noindex, nofollow',
 });
-checkout = replaceFallback(checkout, '<main><h1>Checkout</h1><p>Your cart is stored locally in this browser. Open the interactive site to review the current catalogue-derived total.</p></main>');
+checkout = replaceFallback(checkout, '<main><h1>Checkout</h1><p>Your cart is stored locally in this browser. Open the interactive site to review current catalogue-derived totals and continue the order on Telegram.</p></main>');
 await writeRoute('/checkout', checkout);
 
 const publicUrls = ['/', '/privacy', '/terms', ...products.filter((entry) => entry.inStock !== false).map((entry) => `/product/${encodeURIComponent(entry.id)}`)];
-const sitemap = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${publicUrls.map((route) => `  <url><loc>${origin}${route}</loc></url>`).join('\n')}\n</urlset>\n`;
+const sitemap = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/sitemap/0.9">\n${publicUrls.map((route) => `  <url><loc>${origin}${route}</loc></url>`).join('\n')}\n</urlset>\n`;
 await writeFile(path.join(dist, 'sitemap.xml'), sitemap);
 await writeFile(path.join(dist, 'robots.txt'), `User-agent: *\nAllow: /\n\nUser-agent: OAI-SearchBot\nAllow: /\n\nSitemap: ${origin}/sitemap.xml\n`);

@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "test": "node --experimental-loader ./scripts/asset-loader.mjs --test",
-    "build": "vite build && node --experimental-loader ./scripts/asset-loader.mjs scripts/generate-seo.mjs",
+    "build": "npm test && vite build && node --experimental-loader ./scripts/asset-loader.mjs scripts/generate-seo.mjs",
     "preview": "vite preview"
   },
   "devDependencies": {
