@@ -10,43 +10,66 @@ const productByPath = () => {
   return products.find((product) => product.id === decodeURIComponent(match[1])) || null;
 };
 
+const activeOfferForProduct = (product) => {
+  if (!product) return null;
+  const variants = Array.isArray(product.variants) ? product.variants.filter((variant) => !variant.disabled) : [];
+  if (!variants.length) return product;
+
+  const activeName = document.querySelector('.variant-chip.active')?.dataset?.vname;
+  return variants.find((variant) => variant.name === activeName) || variants[0];
+};
+
 function openTelegram(message) {
   window.open(`${TELEGRAM_BASE}?text=${encodeURIComponent(message)}`, '_blank', 'noopener,noreferrer');
 }
 
-function cartMessage() {
+function orderLinesFromCart() {
   const cart = readStoredCart();
   const items = resolveCartItems(cart);
   if (!items.length) return null;
 
-  const lines = items.map((item) => {
-    const variant = item.variantName ? ` (${item.variantName})` : '';
-    return `• ${item.productName}${variant} ×${item.qty || 1} — ₹${item.lineTotal.toLocaleString('en-IN')}`;
-  });
+  return {
+    cart,
+    lines: items.map((item) => {
+      const variant = item.variantName ? ` (${item.variantName})` : '';
+      return `• ${item.productName}${variant} ×${item.qty || 1} — ₹${item.lineTotal.toLocaleString('en-IN')}`;
+    }),
+  };
+}
+
+function cartMessage() {
+  const order = orderLinesFromCart();
+  if (!order) return null;
 
   return [
     '🛒 SoftBazzar Order',
     '━━━━━━━━━━━━━━━━━━━━',
-    ...lines,
+    ...order.lines,
     '━━━━━━━━━━━━━━━━━━━━',
-    `Total: ₹${calculateCartTotal(cart).toLocaleString('en-IN')}`,
+    `Total: ₹${calculateCartTotal(order.cart).toLocaleString('en-IN')}`,
     '',
     'Please send the payment details for this order.',
-    'After I pay, I will reply here with my payment screenshot.',
+    'After I pay, I will send my payment screenshot in this Telegram chat.',
     `Delivery: within ${DELIVERY_WINDOW} after payment confirmation.`,
   ].join('\n');
 }
 
 function singleProductMessage(product) {
+  const offer = activeOfferForProduct(product);
+  if (!offer) return null;
+
+  const variant = offer !== product && offer.name ? ` (${offer.name})` : '';
+  const price = offer.price || product.price;
+
   return [
     '🛒 SoftBazzar Order',
     '━━━━━━━━━━━━━━━━━━━━',
-    `• ${product.name} — ${product.price}`,
+    `• ${product.name}${variant} — ${price}`,
     '━━━━━━━━━━━━━━━━━━━━',
-    `Total: ${product.price}`,
+    `Total: ${price}`,
     '',
     'Please send the payment details for this order.',
-    'After I pay, I will reply here with my payment screenshot.',
+    'After I pay, I will send my payment screenshot in this Telegram chat.',
     `Delivery: within ${DELIVERY_WINDOW} after payment confirmation.`,
   ].join('\n');
 }
@@ -54,6 +77,45 @@ function singleProductMessage(product) {
 function setText(selector, value) {
   const element = document.querySelector(selector);
   if (element && element.textContent !== value) element.textContent = value;
+}
+
+function getFooterColumn(title) {
+  return [...document.querySelectorAll('.footer-col')].find(
+    (column) => column.querySelector('h4')?.textContent.trim() === title,
+  );
+}
+
+function applyVariantPricing() {
+  const product = productByPath();
+  if (!product) return;
+
+  const offer = activeOfferForProduct(product);
+  if (!offer) return;
+
+  const current = document.getElementById('detailCurrentPrice');
+  if (current && offer.price) current.textContent = offer.price;
+
+  const original = document.querySelector('.detail-original');
+  if (original) {
+    if (offer.mrp) {
+      original.textContent = offer.mrp;
+      original.style.display = '';
+    } else {
+      original.textContent = '';
+      original.style.display = 'none';
+    }
+  }
+
+  const save = document.querySelector('.detail-save');
+  if (save) {
+    if (offer.discount) {
+      save.textContent = `${offer.discount} OFF`;
+      save.style.display = '';
+    } else {
+      save.textContent = '';
+      save.style.display = 'none';
+    }
+  }
 }
 
 function applyStorefrontCopy() {
@@ -86,11 +148,15 @@ function applyStorefrontCopy() {
   }
 
   const statItems = document.querySelectorAll('#stats .stat-item');
+  const offerCount = products.reduce(
+    (sum, product) => sum + (Array.isArray(product.variants) && product.variants.length ? product.variants.length : 1),
+    0,
+  );
   const stats = [
-    [`${products.length}`, 'Current Offers'],
+    [`${products.length}`, 'Products'],
+    [`${offerCount}`, 'Current Offers'],
     ['10m–16h', 'Delivery Window'],
     ['Telegram', 'Order Support'],
-    ['MRP + Sale', 'Clear Pricing'],
   ];
   statItems.forEach((item, index) => {
     if (!stats[index]) return;
@@ -100,17 +166,24 @@ function applyStorefrontCopy() {
     if (label) label.textContent = stats[index][1];
   });
 
-  setText('.cta-subtitle', 'Choose a product, review the price, and continue your order on Telegram.');
+  setText('.cta-subtitle', 'Choose a product, review the sale price, and continue your order on Telegram.');
 
   const footerDescription = document.querySelector('.footer-brand > p');
   if (footerDescription) {
     footerDescription.textContent = `Premium tools and digital subscriptions at lower prices. Orders continue on Telegram, with delivery within ${DELIVERY_WINDOW} after payment confirmation.`;
   }
 
-  const cartNote = document.querySelector('.cart-telegram-note');
-  if (cartNote) cartNote.textContent = 'Order and payment confirmation continue on Telegram.';
+  const categoryColumn = getFooterColumn('Categories');
+  const categoryLinks = categoryColumn?.querySelectorAll('a[data-filter]') || [];
+  const categories = ['AI Tools', 'Developer Tools', 'Design & Creative', 'Productivity'];
+  categoryLinks.forEach((link, index) => {
+    if (!categories[index]) return;
+    link.dataset.filter = categories[index];
+    link.textContent = categories[index];
+  });
 
-  const popularLinks = document.querySelectorAll('.footer-col:nth-of-type(3) a[data-route]');
+  const popularColumn = getFooterColumn('Popular');
+  const popularLinks = popularColumn?.querySelectorAll('a[data-route]') || [];
   const popular = [
     ['/product/chatgpt-plus', 'ChatGPT Plus'],
     ['/product/gemini-pro', 'Gemini Pro'],
@@ -124,19 +197,42 @@ function applyStorefrontCopy() {
     link.textContent = popular[index][1];
   });
 
+  const supportColumn = getFooterColumn('Support');
+  const supportLinks = supportColumn?.querySelectorAll('a') || [];
+  supportLinks.forEach((link) => {
+    if (/24\/7 Support/i.test(link.textContent)) link.textContent = '📞 Telegram Support';
+  });
+
+  const footerPayment = document.querySelector('.footer-payment');
+  if (footerPayment) footerPayment.innerHTML = '<span>Payment details are provided on Telegram</span>';
+
+  document.querySelectorAll('.footer-socials a[href="#"]').forEach((link) => link.remove());
+
+  const cartNote = document.querySelector('.cart-telegram-note');
+  if (cartNote) cartNote.textContent = 'Order and payment confirmation continue on Telegram.';
+
   const checkoutSteps = document.querySelectorAll('.co-steps .co-step');
   if (checkoutSteps.length >= 3) {
     const checkoutCopy = [
-      ['Review Order', 'Verify your product details and total.'],
-      ['Open Telegram', 'Send the pre-filled order details to @softbazzar and receive payment instructions.'],
+      ['Review Order', 'Verify your selected product, plan, quantity, and total.'],
+      ['Open Telegram', 'Send the pre-filled order details to @softbazzar and receive the payment instructions.'],
       ['Send Payment Screenshot', `After paying, send your payment screenshot in the same Telegram chat. Delivery is within ${DELIVERY_WINDOW} after payment confirmation.`],
     ];
     checkoutSteps.forEach((step, index) => {
+      if (!checkoutCopy[index]) return;
       const strong = step.querySelector('strong');
       const paragraph = step.querySelector('p');
       if (strong) strong.textContent = checkoutCopy[index][0];
       if (paragraph) paragraph.textContent = checkoutCopy[index][1];
     });
+  }
+
+  const notice = document.querySelector('.co-right .co-card:not(.co-steps)');
+  if (notice) {
+    const heading = notice.querySelector('h3');
+    const paragraph = notice.querySelector('p');
+    if (heading) heading.textContent = '⚠️ ORDER NOTE';
+    if (paragraph) paragraph.innerHTML = 'Product delivery type varies by listing (for example: account, key, subscription, or access). Review the exact product and plan before payment.';
   }
 
   const sendButton = document.querySelector('#coSendOrder span');
@@ -147,6 +243,16 @@ function applyStorefrontCopy() {
     if (!value || value === 'OFF' || value === 'undefined OFF') badge.style.display = 'none';
   });
 
+  const resolved = resolveCartItems(readStoredCart());
+  document.querySelectorAll('.cart-items .cart-item').forEach((row, index) => {
+    const item = resolved[index];
+    if (!item) return;
+    const name = row.querySelector('.cart-item-name');
+    const sub = row.querySelector('.cart-item-cat');
+    if (name) name.textContent = item.productName;
+    if (sub) sub.textContent = item.variantName ? `${item.variantName} · ${item.cat}` : item.cat;
+  });
+
   const drawer = document.getElementById('cartDrawer');
   if (drawer) {
     drawer.setAttribute('role', 'dialog');
@@ -154,6 +260,7 @@ function applyStorefrontCopy() {
     drawer.setAttribute('aria-label', 'Shopping cart');
   }
   document.getElementById('cartClose')?.setAttribute('aria-label', 'Close cart');
+
   const cartToggle = document.getElementById('cartToggle');
   if (cartToggle) {
     cartToggle.setAttribute('aria-haspopup', 'dialog');
@@ -174,6 +281,8 @@ function applyStorefrontCopy() {
     toast.setAttribute('role', 'status');
     toast.setAttribute('aria-live', 'polite');
   }
+
+  applyVariantPricing();
 }
 
 function rewriteSalesTicker() {
@@ -183,7 +292,7 @@ function rewriteSalesTicker() {
   if (!action || !/just purchased/i.test(action.textContent)) return;
 
   const productName = action.querySelector('span')?.textContent?.trim() || 'SoftBazzar deal';
-  const labels = ['Featured now', 'Catalogue highlight', 'Deal spotlight', 'Worth a look'];
+  const labels = ['Featured now', 'Catalogue highlight', 'Deal spotlight', 'Popular pick', 'Worth a look'];
   const label = labels[Math.floor(Math.random() * labels.length)];
 
   ticker.innerHTML = `
@@ -211,9 +320,16 @@ document.addEventListener('click', (event) => {
     if (!product) return;
     event.preventDefault();
     event.stopImmediatePropagation();
-    openTelegram(singleProductMessage(product));
+    const message = singleProductMessage(product);
+    if (message) openTelegram(message);
   }
 }, true);
+
+document.addEventListener('click', (event) => {
+  if (event.target.closest('.variant-chip')) {
+    requestAnimationFrame(applyVariantPricing);
+  }
+});
 
 document.addEventListener('keydown', (event) => {
   const card = event.target.closest?.('.product-card');
@@ -234,10 +350,17 @@ if (app) {
       scheduled = false;
       applyStorefrontCopy();
     });
-  }).observe(app, { childList: true });
+  }).observe(app, { childList: true, subtree: true });
 }
 
-new MutationObserver(() => rewriteSalesTicker()).observe(document.body, { childList: true, subtree: true });
+new MutationObserver(() => {
+  rewriteSalesTicker();
+  const toast = document.getElementById('toast');
+  if (toast) {
+    toast.setAttribute('role', 'status');
+    toast.setAttribute('aria-live', 'polite');
+  }
+}).observe(document.body, { childList: true, subtree: true });
 
 applyStorefrontCopy();
 rewriteSalesTicker();
