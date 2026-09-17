@@ -92,13 +92,14 @@ test('variant detail pricing updates MRP and discount alongside selling price', 
   assert.match(overrides, /requestAnimationFrame\(applyVariantPricing\)/);
 });
 
-test('activity ticker remains dynamic without claiming fabricated completed purchases', () => {
+test('activity ticker remains dynamic but is rewritten as a non-transactional highlight', () => {
+  assert.match(overrides, /\/just purchased\/i/);
   assert.match(overrides, /Featured now/);
   assert.match(overrides, /Catalogue highlight/);
   assert.match(overrides, /Deal spotlight/);
   assert.match(overrides, /Popular pick/);
   assert.match(overrides, /current offer/);
-  assert.doesNotMatch(overrides, /just purchased/);
+  assert.doesNotMatch(overrides, /just purchased <span>/);
 });
 
 test('original hero video implementation is preserved and override changes copy only', () => {
