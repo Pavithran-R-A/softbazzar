@@ -20,31 +20,38 @@ const VIDEO_URL = 'https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIX
 // === CART STATE ===
 let cart = readStoredCart();
 
-function saveCart() {
-  cart = normalizeStoredCart(cart);
-  writeStoredCart(cart);
+function saveCart(nextCart) {
+  const normalized = normalizeStoredCart(nextCart);
+  if (!writeStoredCart(normalized)) {
+    showToast('Cart could not be saved. Check browser storage.');
+    return false;
+  }
+  cart = normalized;
+  return true;
 }
 
 function addToCart(id, variantName = null) {
   const selection = resolveSelection(id, variantName || null);
   if (!selection) return;
   const existing = cart.find(item => item.id === selection.id && item.variantName === selection.variantName);
+  let nextCart;
   if (existing) {
-    existing.qty = Math.min(99, (existing.qty || 1) + 1);
-    showToast('Increased quantity!');
+    nextCart = cart.map((item) => item === existing
+      ? { ...item, qty: Math.min(99, (item.qty || 1) + 1) }
+      : item);
   } else {
-    cart.push({ id: selection.id, variantName: selection.variantName, qty: 1 });
-    showToast('Added to cart!');
+    nextCart = [...cart, { id: selection.id, variantName: selection.variantName, qty: 1 }];
   }
-  saveCart();
+  if (!saveCart(nextCart)) return;
+  showToast(existing ? 'Increased quantity.' : 'Added to cart.');
   updateCartBadge();
   if (document.querySelector('.cart-drawer.open')) renderCartItems();
 }
 
 function removeFromCart(id, variantName) {
   const normalizedVariant = variantName || null;
-  cart = cart.filter(item => !(item.id === id && item.variantName === normalizedVariant));
-  saveCart();
+  const nextCart = cart.filter(item => !(item.id === id && item.variantName === normalizedVariant));
+  if (!saveCart(nextCart)) return;
   updateCartBadge();
   renderCartItems();
 }
@@ -53,12 +60,13 @@ function updateQuantity(id, variantName, delta) {
   const normalizedVariant = variantName || null;
   const item = cart.find(entry => entry.id === id && entry.variantName === normalizedVariant);
   if (!item) return;
-  item.qty = (item.qty || 1) + delta;
-  if (item.qty <= 0) {
+  const nextQuantity = (item.qty || 1) + delta;
+  if (nextQuantity <= 0) {
     removeFromCart(id, normalizedVariant);
     return;
   }
-  saveCart();
+  const nextCart = cart.map((entry) => entry === item ? { ...entry, qty: nextQuantity } : entry);
+  if (!saveCart(nextCart)) return;
   updateCartBadge();
   renderCartItems();
   if (window.location.pathname === '/checkout') render();
@@ -80,6 +88,8 @@ function updateCartBadge() {
 function showToast(msg) {
   let t = document.getElementById('toast');
   if (!t) { t = document.createElement('div'); t.id = 'toast'; t.className = 'toast'; document.body.appendChild(t); }
+  t.setAttribute('role', 'status');
+  t.setAttribute('aria-live', 'polite');
   t.innerHTML = `${checkSvg} ${msg}`;
   t.classList.remove('show');
   requestAnimationFrame(() => { t.classList.add('show'); });
@@ -87,16 +97,35 @@ function showToast(msg) {
 }
 
 // === CART DRAWER ===
+let cartReturnFocus = null;
 function toggleCart(open) {
-  document.querySelector('.cart-overlay')?.classList.toggle('open', open);
-  document.querySelector('.cart-drawer')?.classList.toggle('open', open);
-  if (open) renderCartItems();
+  const overlay = document.querySelector('.cart-overlay');
+  const drawer = document.querySelector('.cart-drawer');
+  const trigger = document.getElementById('cartToggle');
+  if (!drawer) return;
+  if (open) {
+    cartReturnFocus = document.activeElement;
+    drawer.removeAttribute('inert');
+    overlay?.classList.add('open');
+    drawer.classList.add('open');
+    trigger?.setAttribute('aria-expanded', 'true');
+    renderCartItems();
+    drawer.querySelector('.cart-close')?.focus();
+    return;
+  }
+  overlay?.classList.remove('open');
+  drawer.classList.remove('open');
+  drawer.setAttribute('inert', '');
+  trigger?.setAttribute('aria-expanded', 'false');
+  (cartReturnFocus || trigger)?.focus();
 }
 function renderCartItems() {
   const el = document.querySelector('.cart-items');
   const ft = document.querySelector('.cart-footer');
+  const countEl = document.querySelector('.cart-header .cart-count');
   if (!el) return;
   const resolvedItems = resolveCartItems(cart);
+  if (countEl) countEl.textContent = `(${resolvedItems.reduce((sum, item) => sum + item.qty, 0)})`;
   if (resolvedItems.length === 0) {
     el.innerHTML = `<div class="cart-empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 002 1.61h9.72a2 2 0 002-1.61L23 6H6"/></svg><p>Your cart is empty</p></div>`;
     if (ft) ft.style.display = 'none';
@@ -106,13 +135,11 @@ function renderCartItems() {
   el.innerHTML = resolvedItems.map((item, i) => {
     const variantKey = item.variantName || '';
     return `<div class="cart-item" style="animation-delay:${i*0.05}s"><div class="cart-item-icon" style="background:${item.color}15">${brandIcons[item.icon]||''}</div><div class="cart-item-info"><div class="cart-item-name">${item.displayName}</div><div class="cart-item-cat">${item.cat}</div></div>
-    <div class="cart-qty-ctrl"><button class="cart-qty-btn ripple-btn" data-qty-sub="${item.id}" data-qty-name="${variantKey}">-</button><span class="cart-qty-val">${item.qty||1}</span><button class="cart-qty-btn ripple-btn" data-qty-add="${item.id}" data-qty-name="${variantKey}">+</button></div>
-    <div class="cart-item-price">₹${item.lineTotal.toLocaleString('en-IN')}</div><button class="cart-remove ripple-btn" data-remove-id="${item.id}" data-remove-name="${variantKey}">${trashSvg}</button></div>`;
+    <div class="cart-qty-ctrl"><button class="cart-qty-btn ripple-btn" aria-label="Decrease ${item.displayName} quantity" data-qty-sub="${item.id}" data-qty-name="${variantKey}">−</button><span class="cart-qty-val">${item.qty||1}</span><button class="cart-qty-btn ripple-btn" aria-label="Increase ${item.displayName} quantity" data-qty-add="${item.id}" data-qty-name="${variantKey}">+</button></div>
+    <div class="cart-item-price">₹${item.lineTotal.toLocaleString('en-IN')}</div><button class="cart-remove ripple-btn" aria-label="Remove ${item.displayName} from cart" data-remove-id="${item.id}" data-remove-name="${variantKey}">${trashSvg}</button></div>`;
   }).join('');
   const totalEl = document.querySelector('.cart-total-amount');
-  const countEl = document.querySelector('.cart-header .cart-count');
   if (totalEl) totalEl.textContent = `₹${getCartTotal().toLocaleString('en-IN')}`;
-  if (countEl) countEl.textContent = `(${resolvedItems.reduce((sum, item) => sum + (item.qty || 1), 0)})`;
 }
 
 const marqueeKeys = ['chatgpt','perplexity','gemini','envato','windsurf','microsoft'];
@@ -137,14 +164,14 @@ function productCards(filter, searchQuery = '') {
     const activeVariants = p.variants ? p.variants.filter(v => !v.disabled) : null;
     const defaultPrice = activeVariants && activeVariants.length > 0 ? activeVariants[0].price : p.price;
     const hasVariants = activeVariants && activeVariants.length > 0;
-    return `<div class="product-card fade-up fade-up-delay-${i%4+1}" data-id="${p.id}">
-    <div class="product-img" style="background:linear-gradient(135deg,${p.color}15,${p.color}08)"><div class="brand-svg">${getIcon(p.icon)}</div>${p.tag?`<span class="product-tag">${p.tag}</span>`:''}</div>
-    <div class="product-body"><div class="product-name">${p.name}</div><div class="product-cat">${p.cat}</div>
+    return `<article class="product-card fade-up fade-up-delay-${i%4+1}">
+    <div class="product-img" style="background:linear-gradient(135deg,${p.color}15,${p.color}08)" aria-hidden="true"><div class="brand-svg">${getIcon(p.icon)}</div>${p.tag?`<span class="product-tag">${p.tag}</span>`:''}</div>
+    <div class="product-body"><a class="product-name" href="/product/${encodeURIComponent(p.id)}" data-route>${p.name}</a><div class="product-cat">${p.cat}</div>
     <div class="product-pricing"><span class="product-price">${defaultPrice}</span>${p.mrp ? `<span class="product-mrp">${p.mrp}</span><span class="product-discount">${p.discount} OFF</span>` : ''}</div>
-    <button class="btn-buy ripple-btn" data-add="${p.id}">${cartSvg} ${hasVariants?'Select Options':'Add to Cart'}</button></div></div>`;
+    <button class="btn-buy ripple-btn" data-add="${p.id}">${cartSvg} ${hasVariants?'Select Options':'Add to Cart'}</button></div></article>`;
   }).join('');
 }
-function chipHTML() { return categories.map(c => `<button class="chip ripple-btn ${c==='All'?'active':''}" data-cat="${c}">${c}</button>`).join(''); }
+function chipHTML() { return categories.map(c => `<button class="chip ripple-btn ${c==='All'?'active':''}" data-cat="${c}" aria-pressed="${c==='All'}">${c}</button>`).join(''); }
 
 function navbar() {
   return `<nav class="navbar" id="navbar">
@@ -164,18 +191,18 @@ function navbar() {
 
 function cartDrawer() {
   return `<div class="cart-overlay" id="cartOverlay"></div>
-  <div class="cart-drawer" id="cartDrawer">
-    <div class="cart-header"><h2>Your Cart <span class="cart-count">(${cart.length})</span></h2><button class="cart-close ripple-btn" id="cartClose">${closeSvg}</button></div>
+  <div class="cart-drawer" id="cartDrawer" role="dialog" aria-modal="true" aria-labelledby="cartTitle" inert>
+    <div class="cart-header"><h2 id="cartTitle">Your Cart <span class="cart-count">(${cart.length})</span></h2><button class="cart-close ripple-btn" id="cartClose" aria-label="Close cart">${closeSvg}</button></div>
     <div class="cart-items"></div>
     <div class="cart-footer"><div class="cart-total"><span class="cart-total-label">Total</span><span class="cart-total-amount">₹${getCartTotal()}</span></div>
     <a href="/checkout" data-route class="cart-checkout ripple-btn">${telegramSvg} Proceed to Checkout</a>
-    <p class="cart-telegram-note">Secure payment via UPI or Crypto</p></div>
+    <p class="cart-telegram-note">Order and payment details continue on Telegram.</p></div>
   </div>`;
 }
 
 function footer() {
   return `<footer class="footer"><div class="footer-inner">
-    <div class="footer-brand"><img src="${logoUrl}" alt="SoftBazzar" style="height:28px;"/><p>Your one-stop shop for premium software licenses, OTT subscriptions, and digital tools at the most affordable prices. Instant delivery guaranteed.</p>
+    <div class="footer-brand"><img src="${logoUrl}" alt="SoftBazzar" style="height:28px;"/><p>Browse software and digital subscriptions. Orders continue through Telegram support.</p>
     <div class="footer-contact">
       <a href="${TELEGRAM}" target="_blank"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg> t.me/softbazzar</a>
       <a href="mailto:support@softbazzar.com"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M22 4l-10 8L2 4"/></svg> support@softbazzar.com</a>
@@ -184,17 +211,17 @@ function footer() {
       <li><a href="#" data-filter="AI Tools">AI Tools</a></li><li><a href="#" data-filter="Developer Tools">Developer Tools</a></li>
       <li><a href="#" data-filter="Design Resources">Design Resources</a></li><li><a href="#" data-filter="Social Media Growth">Social Media Growth</a></li>
     </ul></div>
-    <div class="footer-col"><h4>Popular</h4><ul>
+    <div class="footer-col"><h4>Browse</h4><ul>
       <li><a href="/product/chatgpt-plus" data-route>ChatGPT Plus</a></li><li><a href="/product/perplexity-pro" data-route>Perplexity Pro</a></li>
       <li><a href="/product/canva-pro" data-route>Canva Pro</a></li><li><a href="/product/envato" data-route>Envato Elements</a></li>
       <li><a href="/product/reels-views" data-route>1M Reels Views</a></li>
     </ul></div>
     <div class="footer-col"><h4>Legal</h4><ul>
       <li><a href="/privacy" data-route>Privacy Policy</a></li><li><a href="/terms" data-route>Terms & Conditions</a></li>
-      <li><a href="${TELEGRAM}" target="_blank">Refund Policy</a></li><li><a href="${TELEGRAM}" target="_blank">Report an Issue</a></li>
+      <li><a href="${TELEGRAM}" target="_blank">Ask about refunds</a></li><li><a href="${TELEGRAM}" target="_blank">Report an issue</a></li>
     </ul></div>
     <div class="footer-col"><h4>Support</h4><ul>
-      <li><a href="${TELEGRAM}" target="_blank">💬 Live Chat (Telegram)</a></li><li><a href="${TELEGRAM}" target="_blank">📞 24/7 Support</a></li>
+      <li><a href="${TELEGRAM}" target="_blank">Telegram Support</a></li>
       <li><a href="#" data-scroll="how-it-works">❓ How It Works</a></li><li><a href="#" data-scroll="products">🛒 Browse Products</a></li>
     </ul></div>
   </div>
@@ -209,50 +236,47 @@ function footer() {
 }
 
 function homePage() {
-  return `<div class="hero-wrapper">
+  return `<main><div class="hero-wrapper">
     <video class="bg-video" id="bgVideo" src="${VIDEO_URL}" muted playsinline></video><div class="blur-overlay"></div>
     <div class="content-layer">${navbar()}
       <div class="hero-content"><div class="hero-inner">
         <h1 class="hero-headline">Soft<span class="gradient-text">Bazzar</span></h1>
-        <p class="hero-subtitle">Premium software, OTT subscriptions &amp; digital tools<br/>at unbeatable prices. Instant delivery.</p>
+        <p class="hero-subtitle">Compare software, subscriptions, and digital tools. Review an offer, then continue through Telegram.</p>
         <button class="btn-cta ripple-btn magnetic-btn" data-scroll="products"><span>Browse Products</span></button>
       </div></div>
-      <div class="marquee-section"><div class="marquee-container"><div class="marquee-label">Trusted brands<br/>we deliver</div><div class="marquee-track-wrapper"><div class="marquee-track">${marqueeItems()}</div></div></div></div>
+      <div class="marquee-section"><div class="marquee-container"><div class="marquee-label">Available plans</div><div class="marquee-track-wrapper"><div class="marquee-track">${marqueeItems()}</div></div></div></div>
     </div></div>
   <section class="section" id="products"><div class="section-inner">
-    <div class="section-badge fade-up"><span class="dot"></span> Products</div>
     <h2 class="section-title fade-up">Browse our collection</h2>
-    <p class="section-subtitle fade-up" style="margin-bottom: 24px;">Curated subscriptions &amp; productivity plans at prices you won't find anywhere else.</p>
+    <p class="section-subtitle fade-up" style="margin-bottom: 24px;">Browse available subscriptions, software, and digital tools.</p>
     
     <div class="search-container fade-up">
-      <input type="text" id="searchInput" class="search-input" placeholder="Search for AI tools, Netflix, Instagram followers..." autocomplete="off"/>
+      <label class="visually-hidden" for="searchInput">Search products</label><input type="text" id="searchInput" class="search-input" placeholder="Search products" autocomplete="off" aria-label="Search products"/>
     </div>
 
     <div class="category-chips fade-up" id="categoryChips">${chipHTML()}</div>
     <div class="products-grid" id="productsGrid">${productCards('All')}</div>
   </div></section>
   <section class="section" id="how-it-works"><div class="section-inner" style="text-align:center;">
-    <div class="section-badge fade-up" style="margin:0 auto 24px;"><span class="dot"></span> How It Works</div>
     <h2 class="section-title fade-up">Get started in 3 steps</h2>
     <div class="steps-row">
       <div class="step-card fade-up"><h3 class="step-title">Choose your product</h3><p class="step-desc">Browse our catalog of premium software and subscriptions. Pick what you need.</p></div>
-      <div class="step-card fade-up fade-up-delay-1"><h3 class="step-title">Make payment</h3><p class="step-desc">Pay securely via UPI, card, or wallet. All transactions are encrypted and safe.</p></div>
-      <div class="step-card fade-up fade-up-delay-2"><h3 class="step-title">Instant delivery</h3><p class="step-desc">Receive your credentials or activation link instantly via email. Start using right away.</p></div>
+      <div class="step-card fade-up fade-up-delay-1"><h3 class="step-title">Review the order</h3><p class="step-desc">Confirm product availability and payment details with the seller.</p></div>
+      <div class="step-card fade-up fade-up-delay-2"><h3 class="step-title">Confirm next steps</h3><p class="step-desc">Discuss delivery details directly before completing payment.</p></div>
     </div></div></section>
   <section class="section" id="stats"><div class="section-inner" style="text-align:center;">
-    <div class="section-badge fade-up" style="margin:0 auto 24px;"><span class="dot"></span> Trusted</div>
-    <h2 class="section-title fade-up">Why customers love us</h2>
+    <h2 class="section-title fade-up">Before placing an order</h2>
     <div class="stats-row">
-      <div class="stat-item fade-up float-anim"><div class="stat-number">50K+</div><div class="stat-label">Happy Customers</div></div>
-      <div class="stat-item fade-up float-anim" style="animation-delay:.5s"><div class="stat-number">200+</div><div class="stat-label">Products Available</div></div>
-      <div class="stat-item fade-up float-anim" style="animation-delay:1s"><div class="stat-number">99%</div><div class="stat-label">Uptime Guarantee</div></div>
-      <div class="stat-item fade-up float-anim" style="animation-delay:1.5s"><div class="stat-number">24/7</div><div class="stat-label">Customer Support</div></div>
+    <div class="stat-item"><div class="stat-number">${products.length}</div><div class="stat-label">Products listed</div></div>
+      <div class="stat-item"><div class="stat-number">${products.reduce((sum, product) => sum + (product.variants?.filter((variant) => !variant.disabled).length || 1), 0)}</div><div class="stat-label">Current offers</div></div>
+      <div class="stat-item"><div class="stat-number">Review</div><div class="stat-label">Order details first</div></div>
+      <div class="stat-item"><div class="stat-number">Telegram</div><div class="stat-label">Order support</div></div>
     </div></div></section>
   <section class="cta-section"><div class="blur-bg"></div>
-    <h2 class="cta-title fade-up">Ready to save big<br/>on premium software?</h2>
-    <p class="cta-subtitle fade-up">Join 50,000+ customers already saving on their favorite subscriptions.</p>
+    <h2 class="cta-title fade-up">Choose a digital tool<br/>for your workflow</h2>
+    <p class="cta-subtitle fade-up">Choose an offer and review its details before ordering.</p>
     <button class="btn-cta ripple-btn fade-up" style="position:relative;z-index:1;" data-scroll="products"><span>Browse Products</span></button>
-  </section>${footer()}${cartDrawer()}`;
+  </section></main>${footer()}${cartDrawer()}`;
 }
 
 function detailPage(id) {
@@ -263,7 +287,7 @@ function detailPage(id) {
   let variantHtml = '';
   if (activeVariants && activeVariants.length > 0) {
     variantHtml = `<div class="product-variants fade-up fade-up-delay-2" id="variantSelector">` + 
-      activeVariants.map((v, i) => `<button class="variant-chip ripple-btn ${i===0?'active':''}" data-vprice="${v.price}" data-vpricenum="${v.priceNum}" data-vname="${v.name}">${v.name}</button>`).join('') + 
+      activeVariants.map((v, i) => `<button class="variant-chip ripple-btn ${i===0?'active':''}" data-vprice="${v.price}" data-vpricenum="${v.priceNum}" data-vname="${v.name}" aria-pressed="${i===0}">${v.name}</button>`).join('') +
     `</div>`;
   }
 
@@ -271,7 +295,7 @@ function detailPage(id) {
   const defaultPriceNum = activeVariants && activeVariants.length > 0 ? activeVariants[0].priceNum : p.priceNum;
   const defaultName = activeVariants && activeVariants.length > 0 ? activeVariants[0].name : p.name;
   
-  return `${navbar()}
+  return `${navbar()}<main>
   <div class="detail-page page-transition"><div class="section-inner" style="max-width:1100px;margin:0 auto;padding:0 32px 80px;">
     <button class="detail-back ripple-btn" data-home>${backSvg} Back to products</button>
     <div class="detail-grid">
@@ -290,7 +314,7 @@ function detailPage(id) {
         <button class="detail-buy-btn ripple-btn fade-up fade-up-delay-4" data-detail-add="${p.id}" data-vname="${defaultName}" data-vprice="${defaultPrice}" data-vpricenum="${defaultPriceNum}" id="detailBuyBtn"><span>${cartSvg} Add to Cart — ${defaultPrice}</span></button>
         <a href="${TELEGRAM}" target="_blank" class="detail-buy-btn ripple-btn fade-up fade-up-delay-4" style="margin-top:12px;background:linear-gradient(135deg,#229ED9,#1b75bc);text-decoration:none"><span>${telegramSvg} Buy Now on Telegram</span></a>
         <p class="detail-contact fade-up fade-up-delay-4">Need help? Chat with us on <a href="${TELEGRAM}" target="_blank">Telegram @softbazzar</a></p>
-      </div></div></div></div>${footer()}${cartDrawer()}`;
+      </div></div></div></div></main>${footer()}${cartDrawer()}`;
 }
 
 function checkoutPage() {
@@ -315,7 +339,7 @@ function checkoutPage() {
   const hasCert = cart.some(item => item.id === 'infosys' || item.id === 'jpmorgan');
   let certHtml = '';
   if (hasCert) {
-    certHtml = `<div class="co-card" style="margin-top:20px;"><h3>🎓 Certificate Details</h3>
+    certHtml = `<div class="co-card" style="margin-top:20px;"><h3>Certificate Details</h3>
       <p class="co-hint">Please provide details for your certification.</p>
       <input type="text" id="coCertName" class="co-input" placeholder="Full Name" style="margin-bottom:12px;" required />
       <div style="display:flex;gap:12px;margin-bottom:12px;">
@@ -346,7 +370,7 @@ function checkoutPage() {
         <div class="co-card co-steps"><h3>📋 How to Complete Your Order</h3>
           <div class="co-step"><span class="co-step-num">1</span><div><strong>Review Order</strong><p>Verify your cart items.</p></div></div>
           <div class="co-step"><span class="co-step-num">2</span><div><strong>Send to Telegram</strong><p>Click the button below to send your order details securely.</p></div></div>
-          <div class="co-step"><span class="co-step-num">3</span><div><strong>Complete Payment</strong><p>Our agent will provide payment details and deliver your product within 10 mins - 16 hours.</p></div></div>
+      <div class="co-step"><span class="co-step-num">3</span><div><strong>Confirm next steps</strong><p>Review availability, payment instructions, and delivery details with the seller.</p></div></div>
         </div>
         <button class="detail-buy-btn ripple-btn co-send-btn" id="coSendOrder"><span>${telegramSvg} Send Order on Telegram</span></button>
       </div>
@@ -363,32 +387,32 @@ function navigate(path, replace = false) {
 }
 
 function render() {
+  routeController?.abort();
+  routeController = new AbortController();
   const pathname = window.location.pathname.replace(/\/+$/, '') || '/';
   const app = document.querySelector('#app');
   if (pathname.startsWith('/product/')) {
     const id = decodeURIComponent(pathname.slice('/product/'.length));
     app.innerHTML = detailPage(id);
   } else if (pathname === '/checkout') {
-    app.innerHTML = `${navbar()}${checkoutPage()}${footer()}${cartDrawer()}`;
+    app.innerHTML = `${navbar()}<main>${checkoutPage()}</main>${footer()}${cartDrawer()}`;
   } else if (pathname === '/privacy') {
-    app.innerHTML = `${navbar()}<div class="section-inner" style="padding-top:100px;"><button class="detail-back ripple-btn" data-home style="margin-bottom:20px;">${backSvg} Back to Store</button>${privacyPage()}</div>${footer()}${cartDrawer()}`;
+    app.innerHTML = `${navbar()}<main><div class="section-inner" style="padding-top:100px;"><button class="detail-back ripple-btn" data-home style="margin-bottom:20px;">${backSvg} Back to Store</button>${privacyPage()}</div></main>${footer()}${cartDrawer()}`;
   } else if (pathname === '/terms') {
-    app.innerHTML = `${navbar()}<div class="section-inner" style="padding-top:100px;"><button class="detail-back ripple-btn" data-home style="margin-bottom:20px;">${backSvg} Back to Store</button>${termsPage()}</div>${footer()}${cartDrawer()}`;
+    app.innerHTML = `${navbar()}<main><div class="section-inner" style="padding-top:100px;"><button class="detail-back ripple-btn" data-home style="margin-bottom:20px;">${backSvg} Back to Store</button>${termsPage()}</div></main>${footer()}${cartDrawer()}`;
   } else if (pathname === '/') {
     app.innerHTML = homePage();
   } else {
-    app.innerHTML = `${navbar()}<div class="section-inner" style="padding:120px 32px;text-align:center"><h1>Page not found</h1><p>The requested SoftBazzar page is not available.</p><a href="/" data-route>Back to store</a></div>${footer()}${cartDrawer()}`;
+    app.innerHTML = `${navbar()}<main><div class="section-inner" style="padding:120px 32px;text-align:center"><h1>Page not found</h1><p>The requested SoftBazzar page is not available.</p><a href="/" data-route>Back to store</a></div></main>${footer()}${cartDrawer()}`;
   }
   window.scrollTo(0, 0);
   initInteractions();
   updateCartBadge();
 }
 
+let routeController;
 function initInteractions() {
-  const observer = new IntersectionObserver(entries => {
-    entries.forEach(e => { if (e.isIntersecting) e.target.classList.add('visible'); });
-  }, { threshold: 0.08, rootMargin: '0px 0px -40px 0px' });
-  document.querySelectorAll('.fade-up').forEach(el => observer.observe(el));
+  const { signal } = routeController;
 
   // Video
   const video = document.getElementById('bgVideo');
@@ -416,7 +440,6 @@ function initInteractions() {
       gridEl.innerHTML = productCards(filter, query);
       requestAnimationFrame(() => { 
         gridEl.style.transition='opacity .4s,transform .4s'; gridEl.style.opacity='1'; gridEl.style.transform='translateY(0)';
-        gridEl.querySelectorAll('.fade-up').forEach(el => observer.observe(el)); 
       });
     }, 250);
   };
@@ -424,8 +447,12 @@ function initInteractions() {
   if (chipsEl) {
     chipsEl.addEventListener('click', e => {
       const chip = e.target.closest('.chip'); if (!chip) return;
-      chipsEl.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
+      chipsEl.querySelectorAll('.chip').forEach((candidate) => {
+        candidate.classList.remove('active');
+        candidate.setAttribute('aria-pressed', 'false');
+      });
       chip.classList.add('active');
+      chip.setAttribute('aria-pressed', 'true');
       updateGrid();
     });
   }
@@ -445,7 +472,29 @@ function initInteractions() {
 
   // Sticky nav
   const nav = document.querySelector('.navbar');
-  if (nav) window.addEventListener('scroll', () => nav.classList.toggle('scrolled', window.scrollY > 50), { passive: true });
+  if (nav) window.addEventListener('scroll', () => nav.classList.toggle('scrolled', window.scrollY > 50), { passive: true, signal });
+
+  document.addEventListener('keydown', (event) => {
+    const drawer = document.getElementById('cartDrawer');
+    if (!drawer?.classList.contains('open')) return;
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      toggleCart(false);
+      return;
+    }
+    if (event.key !== 'Tab') return;
+    const controls = [...drawer.querySelectorAll('a[href], button:not([disabled]), input:not([disabled])')];
+    if (!controls.length) return;
+    const first = controls[0];
+    const last = controls.at(-1);
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }, { signal });
 
   renderCartItems();
 }
@@ -522,10 +571,6 @@ document.addEventListener('click', e => {
   const qtySub = e.target.closest('[data-qty-sub]');
   if (qtySub) { updateQuantity(qtySub.dataset.qtySub, qtySub.dataset.qtyName, -1); return; }
 
-  // Product card click
-  const card = e.target.closest('.product-card');
-  if (card && !e.target.closest('[data-add]')) { navigate(`/product/${encodeURIComponent(card.dataset.id)}`); return; }
-  
   // Home
   const homeBtn = e.target.closest('[data-home]');
   if (homeBtn) { e.preventDefault(); navigate('/'); return; }
@@ -643,36 +688,3 @@ const animateCursor = () => {
   requestAnimationFrame(animateCursor);
 };
 animateCursor();
-
-// SALES TICKER FEATURE
-function initSalesTicker() {
-  const ticker = document.createElement('div');
-  ticker.className = 'sales-ticker';
-  document.body.appendChild(ticker);
-
-  const cities = ['Mumbai', 'Delhi', 'Bangalore', 'Chennai', 'Hyderabad', 'Pune', 'Kolkata', 'Ahmedabad', 'Surat', 'Lucknow'];
-  const users = ['Pavithran', 'Rahul', 'Sneha', 'Anjali', 'Arjun', 'Priya', 'Kiran', 'Amit', 'Sonia', 'Deepak'];
-  const sampleProducts = products.filter(p => !p.disabled).slice(0, 8);
-
-  const showNext = () => {
-    const user = users[Math.floor(Math.random() * users.length)];
-    const city = cities[Math.floor(Math.random() * cities.length)];
-    const product = sampleProducts[Math.floor(Math.random() * sampleProducts.length)];
-    
-    ticker.innerHTML = `
-      <div class="ticker-avatar">${user[0]}</div>
-      <div class="ticker-content">
-        <div class="ticker-user">${user} from ${city}</div>
-        <div class="ticker-action">just purchased <span>${product.name}</span></div>
-      </div>
-    `;
-    
-    ticker.classList.add('visible');
-    setTimeout(() => ticker.classList.remove('visible'), 5000);
-    setTimeout(showNext, 30000 + Math.random() * 30000);
-  };
-
-  setTimeout(showNext, 10000);
-}
-
-initSalesTicker();

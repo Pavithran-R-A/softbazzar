@@ -2,7 +2,6 @@ import { products } from './data.js';
 import { calculateCartTotal, readStoredCart, resolveCartItems } from './cart-model.js';
 
 const TELEGRAM_BASE = 'https://t.me/softbazzar';
-const DELIVERY_WINDOW = '10 mins - 16 hours';
 
 const productByPath = () => {
   const match = window.location.pathname.match(/^\/product\/([^/]+)$/);
@@ -50,7 +49,7 @@ function cartMessage() {
     '',
     'Please send the payment details for this order.',
     'After I pay, I will send my payment screenshot in this Telegram chat.',
-    `Delivery: within ${DELIVERY_WINDOW} after payment confirmation.`,
+    'Please confirm availability and delivery details with the seller before paying.',
   ].join('\n');
 }
 
@@ -70,7 +69,7 @@ function singleProductMessage(product) {
     '',
     'Please send the payment details for this order.',
     'After I pay, I will send my payment screenshot in this Telegram chat.',
-    `Delivery: within ${DELIVERY_WINDOW} after payment confirmation.`,
+    'Please confirm availability and delivery details with the seller before paying.',
   ].join('\n');
 }
 
@@ -121,7 +120,7 @@ function applyVariantPricing() {
 function applyStorefrontCopy() {
   const heroSubtitle = document.querySelector('.hero-subtitle');
   if (heroSubtitle) {
-    const desired = 'Premium tools, subscriptions & digital software at much lower prices.';
+    const desired = 'Explore digital subscriptions and software. Review each offer before ordering.';
     if (heroSubtitle.textContent.trim() !== desired) heroSubtitle.textContent = desired;
   }
 
@@ -136,7 +135,7 @@ function applyStorefrontCopy() {
     const content = [
       ['Choose your product', 'Pick the premium tool, subscription, or software plan you want.'],
       ['Continue on Telegram', 'Send your order details to @softbazzar and receive the payment instructions there.'],
-      ['Send payment screenshot', `After paying, send the payment screenshot in Telegram. Delivery is within ${DELIVERY_WINDOW} after payment confirmation.`],
+      ['Confirm the order', 'Review the product, availability, payment instructions, and delivery details with the seller.'],
     ];
     steps.forEach((step, index) => {
       if (!content[index]) return;
@@ -155,7 +154,7 @@ function applyStorefrontCopy() {
   const stats = [
     [`${products.length}`, 'Products'],
     [`${offerCount}`, 'Current Offers'],
-    ['10m–16h', 'Delivery Window'],
+    ['Review', 'Order Details'],
     ['Telegram', 'Order Support'],
   ];
   statItems.forEach((item, index) => {
@@ -170,7 +169,7 @@ function applyStorefrontCopy() {
 
   const footerDescription = document.querySelector('.footer-brand > p');
   if (footerDescription) {
-    footerDescription.textContent = `Premium tools and digital subscriptions at lower prices. Orders continue on Telegram, with delivery within ${DELIVERY_WINDOW} after payment confirmation.`;
+    footerDescription.textContent = 'Browse software and digital subscriptions. Orders continue through Telegram support.';
   }
 
   const categoryColumn = getFooterColumn('Categories');
@@ -182,7 +181,7 @@ function applyStorefrontCopy() {
     link.textContent = categories[index];
   });
 
-  const popularColumn = getFooterColumn('Popular');
+  const popularColumn = getFooterColumn('Browse');
   const popularLinks = popularColumn?.querySelectorAll('a[data-route]') || [];
   const popular = [
     ['/product/chatgpt-plus', 'ChatGPT Plus'],
@@ -215,8 +214,8 @@ function applyStorefrontCopy() {
   if (checkoutSteps.length >= 3) {
     const checkoutCopy = [
       ['Review Order', 'Verify your selected product, plan, quantity, and total.'],
-      ['Open Telegram', 'Send the pre-filled order details to @softbazzar and receive the payment instructions.'],
-      ['Send Payment Screenshot', `After paying, send your payment screenshot in the same Telegram chat. Delivery is within ${DELIVERY_WINDOW} after payment confirmation.`],
+      ['Open Telegram', 'Send the pre-filled order details to @softbazzar and request payment instructions.'],
+      ['Confirm the order', 'Review availability, payment instructions, and delivery details with the seller.'],
     ];
     checkoutSteps.forEach((step, index) => {
       if (!checkoutCopy[index]) return;
@@ -231,7 +230,7 @@ function applyStorefrontCopy() {
   if (notice) {
     const heading = notice.querySelector('h3');
     const paragraph = notice.querySelector('p');
-    if (heading) heading.textContent = '⚠️ ORDER NOTE';
+    if (heading) heading.textContent = 'Order note';
     if (paragraph) paragraph.innerHTML = 'Product delivery type varies by listing (for example: account, key, subscription, or access). Review the exact product and plan before payment.';
   }
 
@@ -257,7 +256,8 @@ function applyStorefrontCopy() {
   if (drawer) {
     drawer.setAttribute('role', 'dialog');
     drawer.setAttribute('aria-modal', 'true');
-    drawer.setAttribute('aria-label', 'Shopping cart');
+    drawer.setAttribute('aria-labelledby', 'cartTitle');
+    if (!drawer.classList.contains('open')) drawer.setAttribute('inert', '');
   }
   document.getElementById('cartClose')?.setAttribute('aria-label', 'Close cart');
 
@@ -265,12 +265,8 @@ function applyStorefrontCopy() {
   if (cartToggle) {
     cartToggle.setAttribute('aria-haspopup', 'dialog');
     cartToggle.setAttribute('aria-controls', 'cartDrawer');
+    cartToggle.setAttribute('aria-expanded', String(Boolean(drawer?.classList.contains('open'))));
   }
-
-  document.querySelectorAll('.product-card').forEach((card) => {
-    card.setAttribute('role', 'link');
-    card.setAttribute('tabindex', '0');
-  });
 
   document.querySelectorAll('a[target="_blank"]').forEach((link) => {
     link.setAttribute('rel', 'noopener noreferrer');
@@ -283,25 +279,6 @@ function applyStorefrontCopy() {
   }
 
   applyVariantPricing();
-}
-
-function rewriteSalesTicker() {
-  const ticker = document.querySelector('.sales-ticker');
-  if (!ticker) return;
-  const action = ticker.querySelector('.ticker-action');
-  if (!action || !/just purchased/i.test(action.textContent)) return;
-
-  const productName = action.querySelector('span')?.textContent?.trim() || 'SoftBazzar deal';
-  const labels = ['Featured now', 'Catalogue highlight', 'Deal spotlight', 'Popular pick', 'Worth a look'];
-  const label = labels[Math.floor(Math.random() * labels.length)];
-
-  ticker.innerHTML = `
-    <div class="ticker-avatar">★</div>
-    <div class="ticker-content">
-      <div class="ticker-user">${label}</div>
-      <div class="ticker-action"><span>${productName}</span> · current offer</div>
-    </div>
-  `;
 }
 
 document.addEventListener('click', (event) => {
@@ -331,36 +308,20 @@ document.addEventListener('click', (event) => {
   }
 });
 
-document.addEventListener('keydown', (event) => {
-  const card = event.target.closest?.('.product-card');
-  if (!card || event.target.closest('button, a, input')) return;
-  if (event.key === 'Enter' || event.key === ' ') {
-    event.preventDefault();
-    card.click();
-  }
-});
-
 const app = document.getElementById('app');
 if (app) {
   let scheduled = false;
-  new MutationObserver(() => {
+  const observer = new MutationObserver(() => {
     if (scheduled) return;
     scheduled = true;
     requestAnimationFrame(() => {
       scheduled = false;
+      observer.disconnect();
       applyStorefrontCopy();
+      observer.observe(app, { childList: true, subtree: true });
     });
-  }).observe(app, { childList: true, subtree: true });
+  });
+  observer.observe(app, { childList: true, subtree: true });
 }
 
-new MutationObserver(() => {
-  rewriteSalesTicker();
-  const toast = document.getElementById('toast');
-  if (toast) {
-    toast.setAttribute('role', 'status');
-    toast.setAttribute('aria-live', 'polite');
-  }
-}).observe(document.body, { childList: true, subtree: true });
-
 applyStorefrontCopy();
-rewriteSalesTicker();

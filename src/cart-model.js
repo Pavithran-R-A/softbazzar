@@ -83,7 +83,13 @@ export function readStoredCart(storage = globalThis.localStorage) {
   }
 }
 
-export function writeStoredCart(items, storage = globalThis.localStorage) {
-  if (!storage) return;
-  storage.setItem(CART_STORAGE_KEY, JSON.stringify(normalizeStoredCart(items)));
+export function writeStoredCart(items, storage) {
+  try {
+    const target = storage ?? globalThis.localStorage;
+    if (!target) return false;
+    target.setItem(CART_STORAGE_KEY, JSON.stringify(normalizeStoredCart(items)));
+    return true;
+  } catch {
+    return false;
+  }
 }

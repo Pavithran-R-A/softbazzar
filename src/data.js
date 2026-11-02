@@ -87,19 +87,19 @@ const makeProduct = (config) => {
     features: config.features || [
       'Plan exactly as listed',
       'Order details and payment confirmation on Telegram',
-      'Delivery within 10 mins - 16 hours after payment confirmation',
+      'Confirm delivery details with the seller before payment',
     ],
   };
 };
 
 export const products = [
   makeProduct({id:"gemini-pro",name:"Gemini Pro (18 Months)",cat:"AI Tools",icon:"gemini",color:"#4285F4",priceNum:649,mrp:"₹17,550",mrpNum:17550,tag:"Hot Deal"}),
-  makeProduct({id:"canva-pro",name:"Canva Pro (3 Years)",cat:"Design & Creative",icon:"canva",color:"#7D2AE8",priceNum:229,mrp:"₹41,621",mrpNum:41621,tag:"Popular"}),
-  makeProduct({id:"chatgpt-plus",name:"ChatGPT Plus (1 Month)",cat:"AI Tools",icon:"chatgpt",color:"#10A37F",priceNum:699,mrp:"₹1,999",mrpNum:1999,tag:"Trending"}),
+  makeProduct({id:"canva-pro",name:"Canva Pro (3 Years)",cat:"Design & Creative",icon:"canva",color:"#7D2AE8",priceNum:229,mrp:"₹41,621",mrpNum:41621}),
+  makeProduct({id:"chatgpt-plus",name:"ChatGPT Plus (1 Month)",cat:"AI Tools",icon:"chatgpt",color:"#10A37F",priceNum:699,mrp:"₹1,999",mrpNum:1999}),
   makeProduct({id:"super-grok",name:"Super Grok",cat:"AI Tools",icon:"grok",color:"#111111",variants:[{name:"1 Year",priceNum:1749,mrp:"₹34,423",mrpNum:34423},{name:"7–10 Days",priceNum:199,mrp:"₹956",mrpNum:956}]}),
-  makeProduct({id:"microsoft-365-lifetime",name:"Microsoft 365 (Lifetime)",cat:"Productivity",icon:"microsoft",color:"#5E5E5E",priceNum:999,mrp:"₹6,899/Year",mrpNum:6899,tag:"Popular"}),
+  makeProduct({id:"microsoft-365-lifetime",name:"Microsoft 365 (Lifetime)",cat:"Productivity",icon:"microsoft",color:"#5E5E5E",priceNum:999,mrp:"₹6,899/Year",mrpNum:6899}),
   makeProduct({id:"coursera-1y",name:"Coursera (1 Year)",cat:"Education",icon:"coursera",color:"#0056D2",priceNum:1299,mrp:"₹34,000",mrpNum:34000}),
-  makeProduct({id:"capcut-pro",name:"CapCut Pro",cat:"Design & Creative",icon:"capcut",color:"#111111",tag:"Popular",variants:[{name:"1 Month • Ready Account • 25 Days Warranty",priceNum:449,mrp:"₹999",mrpNum:999},{name:"1 Week",priceNum:99,mrp:"₹249",mrpNum:249},{name:"1 Month • Ready Account • 7 Days Warranty",priceNum:229,mrp:"₹999",mrpNum:999}]}),
+  makeProduct({id:"capcut-pro",name:"CapCut Pro",cat:"Design & Creative",icon:"capcut",color:"#111111",variants:[{name:"1 Month • Ready Account • 25 Days Warranty",priceNum:449,mrp:"₹999",mrpNum:999},{name:"1 Week",priceNum:99,mrp:"₹249",mrpNum:249},{name:"1 Month • Ready Account • 7 Days Warranty",priceNum:229,mrp:"₹999",mrpNum:999}]}),
   makeProduct({id:"autodesk-all-apps-1y",name:"Autodesk All Apps (1 Year)",cat:"Software & Licenses",icon:"autodesk",color:"#0696D7",priceNum:999,mrp:"₹2.2 Lakhs",mrpNum:220000,tag:"Hot Deal"}),
   makeProduct({id:"windows-pro-retail",name:"Windows 10/11 Pro Retail Key",cat:"Software & Licenses",icon:"windows",color:"#00A4EF",priceNum:999,mrp:"₹12,000",mrpNum:12000}),
   makeProduct({id:"linkedin-premium-1y",name:"LinkedIn Premium (Any Plan • 1 Year)",cat:"Productivity",icon:"linkedin",color:"#0A66C2",priceNum:1499,mrp:"₹19,999",mrpNum:19999}),
@@ -130,7 +130,7 @@ export const products = [
   makeProduct({id:"chatprd-pro-1y",name:"chatPRD Pro (1 Year)",cat:"Developer Tools",icon:"chatprd",color:"#6D5DFB",priceNum:1499,mrp:"₹5,999",mrpNum:5999}),
   makeProduct({id:"reclaim-startup-1y",name:"Reclaim.ai Startup Pack (1 Year)",cat:"Productivity",icon:"reclaim",color:"#6B4EFF",priceNum:1499,mrp:"₹11,491",mrpNum:11491}),
   makeProduct({id:"wisprflow-ai-1y",name:"WisprFlow AI (1 Year)",cat:"AI Tools",icon:"wisprflow",color:"#5A67D8",priceNum:1999,mrp:"₹13,000",mrpNum:13000}),
-  makeProduct({id:"posthog-scale-1y",name:"PostHog Scale (1 Year)",cat:"Developer Tools",icon:"posthog",color:"#F9BD2B",priceNum:1699,mrp:"US$24,000"}),
+  makeProduct({id:"posthog-scale-1y",name:"PostHog Scale (1 Year)",cat:"Developer Tools",icon:"posthog",color:"#F9BD2B",priceNum:1699}),
   makeProduct({id:"factory-ai-pro-1y",name:"Factory AI Pro (1 Year)",cat:"AI Tools",icon:"factory",color:"#111111",priceNum:1999,mrp:"₹22,999",mrpNum:22999}),
   makeProduct({id:"granola-ai-business-1y",name:"Granola AI Business (1 Year)",cat:"AI Tools",icon:"granola",color:"#F3E9D2",priceNum:799,mrp:"₹16,064",mrpNum:16064}),
   makeProduct({id:"gamma-app-pro-1y",name:"Gamma App Pro (1 Year)",cat:"AI Tools",icon:"gamma",color:"#292929",priceNum:3999,mrp:"₹17,000",mrpNum:17000}),
@@ -142,7 +142,7 @@ export const products = [
   makeProduct({id:"mobbin-team-1y",name:"Mobbin Team (10 Users • 1 Year)",cat:"Design & Creative",icon:"mobbin",color:"#111111",priceNum:1499,mrp:"₹17,999",mrpNum:17999}),
   makeProduct({id:"intercom-advanced-1y",name:"Intercom Advanced (1 Year)",cat:"Productivity",icon:"intercom",color:"#286EFA",priceNum:1499,mrp:"₹98,000",mrpNum:98000}),
   makeProduct({id:"freepik-magnific",name:"Freepik (Magnific)",cat:"Design & Creative",icon:"freepik",color:"#1273EB",variants:[{name:"1 Month",priceNum:749,mrp:"₹1,740",mrpNum:1740},{name:"3 Months",priceNum:1999,mrp:"₹5,220",mrpNum:5220},{name:"6 Months",priceNum:3999,mrp:"₹10,440",mrpNum:10440},{name:"12 Months",priceNum:7999,mrp:"₹15,140",mrpNum:15140}]}),
-  makeProduct({id:"envato-elements",name:"Envato Elements",cat:"Design & Creative",icon:"envato",color:"#81B441",tag:"Popular",variants:[{name:"1 Month",priceNum:799,mrp:"₹3,390",mrpNum:3390},{name:"3 Months",priceNum:2299,mrp:"₹10,170",mrpNum:10170},{name:"6 Months",priceNum:4499,mrp:"₹20,340",mrpNum:20340},{name:"12 Months",priceNum:8999,mrp:"₹40,680",mrpNum:40680}]}),
+  makeProduct({id:"envato-elements",name:"Envato Elements",cat:"Design & Creative",icon:"envato",color:"#81B441",variants:[{name:"1 Month",priceNum:799,mrp:"₹3,390",mrpNum:3390},{name:"3 Months",priceNum:2299,mrp:"₹10,170",mrpNum:10170},{name:"6 Months",priceNum:4499,mrp:"₹20,340",mrpNum:20340},{name:"12 Months",priceNum:8999,mrp:"₹40,680",mrpNum:40680}]}),
 ];
 
 export const categories = ['All', ...new Set(products.map((product) => product.cat))];

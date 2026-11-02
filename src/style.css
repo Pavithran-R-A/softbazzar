@@ -1,15 +1,49 @@
+/* Hallmark · checked: 2026-11-02 · genre: modern-minimal (inferred) */
+/* Hallmark · pre-emit critique: P4 H4 E4 S4 R4 V3 · weakest: V, repeated route actions; preserved the storefront’s product-first layout */
+/* floor: inactive starter stylesheet · excluded from the application build · v2.0.0 */
 :root {
-  --text: #6b6375;
-  --text-h: #08060d;
-  --bg: #fff;
-  --border: #e5e4e7;
-  --code-bg: #f4f3ec;
-  --accent: #aa3bff;
-  --accent-bg: rgba(170, 59, 255, 0.1);
-  --accent-border: rgba(170, 59, 255, 0.5);
-  --social-bg: rgba(244, 243, 236, 0.5);
+  --brand-violet: #a855f7;
+  --brand-indigo: #7658d6;
+  --brand-amber: #fcd34d;
+  --color-success: #22c55e;
+  --color-danger: #f43f5e;
+  --color-white: #fff;
+  --color-body-ink: #6b6375;
+  --color-heading-ink: #08060d;
+  --color-border: #e5e4e7;
+  --color-code-surface: #f4f3ec;
+  --brand-violet-light: #aa3bff;
+  --color-body-muted: #9ca3af;
+  --color-heading-light: #f3f4f6;
+  --color-page-dark: #16171d;
+  --color-border-dark: #2e303a;
+  --color-surface-dark: #1f2028;
+  --brand-violet-light: #c084fc;
+  --color-overlay-aa3bff-10: rgba(170, 59, 255, 0.1);
+  --color-overlay-aa3bff-50: rgba(170, 59, 255, 0.5);
+  --color-overlay-f4f3ec-50: rgba(244, 243, 236, 0.5);
+  --color-black-overlay-10: rgba(0, 0, 0, 0.1);
+  --color-black-overlay-05: rgba(0, 0, 0, 0.05);
+  --color-overlay-c084fc-15: rgba(192, 132, 252, 0.15);
+  --color-overlay-c084fc-50: rgba(192, 132, 252, 0.5);
+  --color-overlay-2f303a-50: rgba(47, 48, 58, 0.5);
+  --color-black-overlay-40: rgba(0, 0, 0, 0.4);
+  --color-black-overlay-25: rgba(0, 0, 0, 0.25);
+  --color-action-violet: #7e22ce;
+  --font-mono: ui-monospace, Consolas, monospace;
+}
+:root {
+  --text: var(--color-body-ink);
+  --text-h: var(--color-heading-ink);
+  --bg: var(--color-white);
+  --border: var(--color-border);
+  --code-bg: var(--color-code-surface);
+  --accent: var(--brand-violet-light);
+  --accent-bg: var(--color-overlay-aa3bff-10);
+  --accent-border: var(--color-overlay-aa3bff-50);
+  --social-bg: var(--color-overlay-f4f3ec-50);
   --shadow:
-    rgba(0, 0, 0, 0.1) 0 10px 15px -3px, rgba(0, 0, 0, 0.05) 0 4px 6px -2px;
+    var(--color-black-overlay-10) 0 10px 15px -3px, var(--color-black-overlay-05) 0 4px 6px -2px;
 
   --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
   --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
@@ -32,17 +66,17 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --text: #9ca3af;
-    --text-h: #f3f4f6;
-    --bg: #16171d;
-    --border: #2e303a;
-    --code-bg: #1f2028;
-    --accent: #c084fc;
-    --accent-bg: rgba(192, 132, 252, 0.15);
-    --accent-border: rgba(192, 132, 252, 0.5);
-    --social-bg: rgba(47, 48, 58, 0.5);
+    --text: var(--color-body-muted);
+    --text-h: var(--color-heading-light);
+    --bg: var(--color-page-dark);
+    --border: var(--color-border-dark);
+    --code-bg: var(--color-surface-dark);
+    --accent: var(--brand-violet-light);
+    --accent-bg: var(--color-overlay-c084fc-15);
+    --accent-border: var(--color-overlay-c084fc-50);
+    --social-bg: var(--color-overlay-2f303a-50);
     --shadow:
-      rgba(0, 0, 0, 0.4) 0 10px 15px -3px, rgba(0, 0, 0, 0.25) 0 4px 6px -2px;
+      var(--color-black-overlay-40) 0 10px 15px -3px, var(--color-black-overlay-25) 0 4px 6px -2px;
   }
 
   #social .button-icon {

@@ -25,7 +25,7 @@ test('September 2026 catalogue matches the supplied storefront set', () => {
   assert.equal(byId('chatgpt-plus')?.priceNum, 699);
   assert.equal(byId('microsoft-365-lifetime')?.mrp, '₹6,899/Year');
   assert.equal(byId('autodesk-all-apps-1y')?.mrp, '₹2.2 Lakhs');
-  assert.equal(byId('posthog-scale-1y')?.mrp, 'US$24,000');
+  assert.equal(byId('posthog-scale-1y')?.mrp, undefined);
 });
 
 test('multi-plan products keep every supplied price and MRP as variants', () => {
@@ -80,7 +80,8 @@ test('items supplied without MRP keep sale price only', () => {
 
 test('checkout uses Telegram screenshot flow without clearing the cart', () => {
   assert.match(overrides, /send my payment screenshot in this Telegram chat/);
-  assert.match(overrides, /10 mins - 16 hours/);
+  assert.match(overrides, /confirm availability and delivery details/i);
+  assert.doesNotMatch(overrides, /10 mins - 16 hours/);
   assert.match(overrides, /stopImmediatePropagation\(\)/);
   assert.doesNotMatch(overrides, /localStorage\.removeItem|writeStoredCart\(\[\]\)/);
 });
@@ -92,14 +93,9 @@ test('variant detail pricing updates MRP and discount alongside selling price', 
   assert.match(overrides, /requestAnimationFrame\(applyVariantPricing\)/);
 });
 
-test('activity ticker remains dynamic but is rewritten as a non-transactional highlight', () => {
-  assert.match(overrides, /\/just purchased\/i/);
-  assert.match(overrides, /Featured now/);
-  assert.match(overrides, /Catalogue highlight/);
-  assert.match(overrides, /Deal spotlight/);
-  assert.match(overrides, /Popular pick/);
-  assert.match(overrides, /current offer/);
-  assert.doesNotMatch(overrides, /just purchased <span>/);
+test('storefront does not fabricate customer purchase activity', () => {
+  assert.doesNotMatch(mainJs, /initSalesTicker|just purchased/);
+  assert.doesNotMatch(overrides, /rewriteSalesTicker|Popular pick|Featured now/);
 });
 
 test('original hero video implementation is preserved and override changes copy only', () => {
