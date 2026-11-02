@@ -92,6 +92,7 @@ test('Vercel preserves static routes and ships a branded HTTP 404 page', () => {
   ]);
   assert.equal(vercel.rewrites.length, 4);
   assert.match(notFound, /<title>Page not found \| SoftBazzar<\/title>/);
+  assert.match(notFound, /href="\/favicon\.svg"/);
   assert.match(notFound, /<h1>That page isn’t here\.<\/h1>/);
   assert.match(notFound, /href="\/"[^>]*>Back to SoftBazzar<\/a>/);
   assert.doesNotMatch(notFound, /<script\b/i);
