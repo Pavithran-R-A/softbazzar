@@ -43,16 +43,16 @@ const websiteLd = {
   '@type': 'WebSite',
   name: 'SoftBazzar',
   url: `${origin}/`,
-  description: 'Premium digital tools and subscription catalogue with Telegram-assisted ordering.',
+  description: 'Digital tools and subscription catalogue with Telegram-assisted ordering.',
 };
 
 let home = replaceMeta(baseHtml, {
   title: 'SoftBazzar — Premium AI Tools & Digital Subscriptions',
-  description: "Browse SoftBazzar's premium tools and digital subscriptions, compare MRP with current sale prices, and continue ordering through Telegram.",
+  description: "Browse SoftBazzar's digital tools and subscriptions, compare listed prices, and continue ordering through Telegram.",
   url: `${origin}/`,
   jsonLd: websiteLd,
 });
-home = replaceFallback(home, '<main><h1>SoftBazzar</h1><p>Premium tools and digital subscriptions at lower prices. Compare current sale prices and available plans.</p></main>');
+home = replaceFallback(home, '<main><h1>SoftBazzar</h1><p>Browse digital tools and subscriptions. Compare listed prices and current plans.</p></main>');
 await writeRoute('/', home);
 
 const legalRoutes = [
@@ -67,7 +67,7 @@ for (const page of legalRoutes) {
     url,
     jsonLd: { '@context': 'https://schema.org', '@type': 'WebPage', name: page.title, url, description: page.description, isPartOf: { '@id': `${origin}/#website` } },
   });
-  html = replaceFallback(html, page.content);
+  html = replaceFallback(html, `<main>${page.content}</main>`);
   await writeRoute(page.route, html);
 }
 

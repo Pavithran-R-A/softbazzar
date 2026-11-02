@@ -7,6 +7,7 @@ const mainSource = readFileSync(new URL('../src/main.js', import.meta.url), 'utf
 const overrideSource = readFileSync(new URL('../src/storefront-overrides.js', import.meta.url), 'utf8');
 const pagesSource = readFileSync(new URL('../src/pages.js', import.meta.url), 'utf8');
 const vercel = JSON.parse(readFileSync(new URL('../vercel.json', import.meta.url), 'utf8'));
+const seoGeneratorSource = readFileSync(new URL('../scripts/generate-seo.mjs', import.meta.url), 'utf8');
 
 test('production source contains no browser-only admin password or admin price overrides', () => {
   assert.doesNotMatch(mainSource, /Enter Admin Password|sb_admin_auth|sb_admin_data|btoa\(/);
@@ -88,6 +89,8 @@ test('Vercel config exposes only explicit app routes and baseline browser securi
 test('SEO generator exists and hash fragments are not used as sitemap URLs', () => {
   const generatorPath = new URL('../scripts/generate-seo.mjs', import.meta.url);
   assert.ok(existsSync(generatorPath), 'scripts/generate-seo.mjs must exist');
+  assert.doesNotMatch(seoGeneratorSource, /at lower prices|premium tools and digital subscriptions/i);
+  assert.match(seoGeneratorSource, /replaceFallback\(html, `<main>\$\{page\.content\}<\/main>`\)/);
   if (existsSync(new URL('../public/sitemap.xml', import.meta.url))) {
     const sitemap = readFileSync(new URL('../public/sitemap.xml', import.meta.url), 'utf8');
     assert.doesNotMatch(sitemap, /#contact|#product|#privacy|#terms/);
