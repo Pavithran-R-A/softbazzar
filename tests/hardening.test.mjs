@@ -78,8 +78,9 @@ test('public policy copy describes localStorage accurately rather than claiming 
   assert.match(pagesSource, /localStorage|local storage/i);
 });
 
-test('Vercel config preserves static routes and falls back to the branded SPA', () => {
+test('Vercel preserves static routes and ships a branded HTTP 404 page', () => {
   const serialized = JSON.stringify(vercel);
+  const notFound = readFileSync(new URL('../public/404.html', import.meta.url), 'utf8');
   assert.match(serialized, /X-Content-Type-Options/);
   assert.match(serialized, /Content-Security-Policy/);
   assert.match(serialized, /Referrer-Policy/);
@@ -89,11 +90,11 @@ test('Vercel config preserves static routes and falls back to the branded SPA', 
     '/checkout',
     '/product/:id',
   ]);
-  assert.deepEqual(vercel.rewrites.at(-1), {
-    source: '/(.*)',
-    destination: '/index.html',
-  });
-  assert.match(mainSource, /Page not found/);
+  assert.equal(vercel.rewrites.length, 4);
+  assert.match(notFound, /<title>Page not found \| SoftBazzar<\/title>/);
+  assert.match(notFound, /<h1>That page isn’t here\.<\/h1>/);
+  assert.match(notFound, /href="\/"[^>]*>Back to SoftBazzar<\/a>/);
+  assert.doesNotMatch(notFound, /<script\b/i);
 });
 
 test('SEO generator exists and hash fragments are not used as sitemap URLs', () => {
