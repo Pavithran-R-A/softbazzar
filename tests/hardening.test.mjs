@@ -78,12 +78,22 @@ test('public policy copy describes localStorage accurately rather than claiming 
   assert.match(pagesSource, /localStorage|local storage/i);
 });
 
-test('Vercel config exposes only explicit app routes and baseline browser security headers', () => {
+test('Vercel config preserves static routes and falls back to the branded SPA', () => {
   const serialized = JSON.stringify(vercel);
   assert.match(serialized, /X-Content-Type-Options/);
   assert.match(serialized, /Content-Security-Policy/);
   assert.match(serialized, /Referrer-Policy/);
-  assert.doesNotMatch(serialized, /"source":"\/\(\.\*\)"[^}]*"destination":"\/index\.html"/);
+  assert.deepEqual(vercel.rewrites.slice(0, 4).map(({ source }) => source), [
+    '/privacy',
+    '/terms',
+    '/checkout',
+    '/product/:id',
+  ]);
+  assert.deepEqual(vercel.rewrites.at(-1), {
+    source: '/(.*)',
+    destination: '/index.html',
+  });
+  assert.match(mainSource, /Page not found/);
 });
 
 test('SEO generator exists and hash fragments are not used as sitemap URLs', () => {
