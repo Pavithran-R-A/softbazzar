@@ -5,14 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "cf:dev": "npm run build && wrangler dev",
     "test": "node --experimental-loader ./scripts/asset-loader.mjs --test",
     "build": "npm test && vite build && node --experimental-loader ./scripts/asset-loader.mjs scripts/generate-seo.mjs",
     "preview": "vite preview"
   },
   "devDependencies": {
-    "vite": "8.1.0"
-  },
-  "dependencies": {
-    "@vercel/analytics": "2.0.1"
+    "vite": "^8.3.7"
   }
 }

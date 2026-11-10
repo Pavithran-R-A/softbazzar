@@ -1,19 +1,20 @@
 # SoftBazzar Storefront
 
-The customer-facing storefront for SoftBazzar, a small digital-products catalogue. This repository is focused on the web experience: browsing products, filtering the catalogue, managing a local cart, reviewing policies, and handing a customer off to the configured support/checkout channel.
+The SoftBazzar storefront and Cloudflare Worker backend. Supplier inventory is the only active catalogue source. Checkout stays disabled until payment and fulfilment reviews finish.
 
-The code is intentionally lightweight. It uses Vite and plain JavaScript rather than a large frontend framework, with product and category data kept separately from the rendering code.
+The code uses Vite and plain JavaScript. Runtime products come from the Worker API.
 
 ## What it includes
 
 - searchable product catalogue and category filters
-- product variants and stock/availability states
+- validated supplier stock and availability
 - cart state persisted in the browser
-- checkout summary and support hand-off
+- D1 catalogue, synchronization history, FX, and order schema
+- two-minute supplier synchronization Worker
+- INR and approximate USD pricing at fixed 25% markup
 - privacy and terms pages
 - responsive storefront UI
-- Vercel Analytics integration
-- small asset-processing scripts used while maintaining the catalogue
+- explicitly labelled development fixture inventory
 
 ## Development
 
@@ -30,6 +31,33 @@ Build the production site with:
 npm run build
 ```
 
+Run locally with Cloudflare bindings:
+
+```bash
+npm run cf:dev
+```
+
+Before staging, create D1 and set `database_id`.
+Apply local migrations with `wrangler d1 migrations apply softbazzar --local`.
+Set secrets with `wrangler secret put AITOOLSHOP_API_KEY` and
+`wrangler secret put ADMIN_TOKEN`. Configure FX through the
+authenticated `/api/admin/fx` endpoint. Never commit secret values.
+
+For isolated staging, create `softbazzar-staging` D1.
+Set its identifier under `env.staging.d1_databases`.
+Apply staging migrations before deploying the Worker.
+Add secrets with `wrangler secret put AITOOLSHOP_API_KEY --env staging`.
+Keep the supplier secret unset until owner configuration.
+Add `ADMIN_TOKEN` only through Wrangler secrets.
+Keep YouPI credentials unset during this review.
+Deploy staging with `wrangler deploy --env staging`.
+Staging keeps payments and purchases disabled.
+Never use the production deploy command here.
+
+For rollback, inspect `wrangler deployments list --env staging`.
+Then select the verified prior staging version.
+Keep the production domain unchanged throughout staging.
+
 Preview the generated build locally:
 
 ```bash
@@ -40,14 +68,16 @@ npm run preview
 
 ```text
 src/main.js       storefront behaviour and rendering
-src/data.js       catalogue/category data
+src/data.js       brand icons and empty product seed
+src/worker.js     Cloudflare API and scheduled sync
+src/supplier.js   validated reseller API client
+src/pricing.js    fixed markup and decimal-safe conversions
+migrations/       versioned D1 schema
 src/pages.js      static policy/support page content
 src/index.css     visual system and responsive styles
 public/           static assets
 ```
 
-The repository also contains a few maintenance scripts for catalogue/assets. They are not required for normal storefront browsing.
-
-## Scope
-
-This repository contains the web storefront, not the full operational backend. Supplier synchronization, order processing and Telegram automation are maintained separately. Keeping those concerns separate makes the public-facing site easier to deploy and reason about.
+Existing catalogue records remain recoverable through Git history.
+Do not enable live payment or supplier purchase flags.
+The fixture in `fixtures/catalogue.dev.json` is never loaded in production.

@@ -2,9 +2,9 @@ import { products } from './data.js';
 
 export const CART_STORAGE_KEY = 'sb_cart_v2';
 
-function cleanQuantity(value) {
+function cleanQuantity(value, maximum=99) {
   const quantity = Number(value);
-  return Number.isInteger(quantity) && quantity > 0 ? Math.min(quantity, 99) : 1;
+  return Number.isInteger(quantity) && quantity > 0 ? Math.min(quantity, maximum) : 1;
 }
 
 export function resolveSelection(id, variantName = null) {
@@ -34,12 +34,13 @@ export function resolveSelection(id, variantName = null) {
     icon: product.icon,
     cat: product.cat,
     color: product.color,
+    maxQuantity: product.unlimited ? 99 : Math.max(1, Number(product.stock) || 1),
   };
 }
 
 export function normalizeStoredCart(value) {
   if (!Array.isArray(value)) return [];
-  const normalized = [];
+  const normalized = new Map();
 
   for (const row of value) {
     if (!row || typeof row !== 'object' || typeof row.id !== 'string') continue;
@@ -53,13 +54,13 @@ export function normalizeStoredCart(value) {
     const selection = resolveSelection(row.id, requestedVariant);
     if (!selection) continue;
 
-    const item = { id: selection.id, variantName: selection.variantName, qty: cleanQuantity(row.qty) };
-    const existing = normalized.find((entry) => entry.id === item.id && entry.variantName === item.variantName);
-    if (existing) existing.qty = Math.min(99, existing.qty + item.qty);
-    else normalized.push(item);
+    const item = { id: selection.id, variantName: selection.variantName, qty: cleanQuantity(row.qty, selection.maxQuantity) };
+    const key = `${item.id}\u0000${item.variantName ?? ''}`;
+    const existing = normalized.get(key);
+    normalized.set(key, existing ? { ...existing, qty: Math.min(99, existing.qty + item.qty) } : item);
   }
 
-  return normalized;
+  return [...normalized.values()];
 }
 
 export function resolveCartItems(items) {
@@ -85,5 +86,6 @@ export function readStoredCart(storage = globalThis.localStorage) {
 
 export function writeStoredCart(items, storage = globalThis.localStorage) {
   if (!storage) return;
-  storage.setItem(CART_STORAGE_KEY, JSON.stringify(normalizeStoredCart(items)));
+  try { storage.setItem(CART_STORAGE_KEY, JSON.stringify(normalizeStoredCart(items))); return true; }
+  catch { return false; }
 }
