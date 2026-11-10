@@ -35,9 +35,11 @@ test('cart stores supplier IDs and respects current stock', () => {
 test('sensitive credentials stay worker side and features default disabled', () => {
   const supplier = readFileSync(new URL('../src/supplier.js', import.meta.url), 'utf8');
   const worker = readFileSync(new URL('../src/worker.js', import.meta.url), 'utf8');
+  const ui = readFileSync(new URL('../src/main.js', import.meta.url), 'utf8');
   const config = readFileSync(new URL('../wrangler.toml', import.meta.url), 'utf8');
   assert.match(supplier, /Authorization: `Bearer \$\{env\.AITOOLSHOP_API_KEY\}`/);
   assert.match(config, /SUPPLIER_PURCHASES_ENABLED = "false"/);
   assert.match(config, /YOUPI_LIVE_ENABLED = "false"/);
   assert.match(worker, /safeEqual\(auth,env\.ADMIN_TOKEN\)/);
+  assert.doesNotMatch(ui, /supplierCostUsdt|Supplier cost:/);
 });

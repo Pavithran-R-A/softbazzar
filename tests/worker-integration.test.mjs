@@ -107,7 +107,9 @@ test('catalogue, required email, stock, quote locking, and expiry', async () => 
   assert.equal(body.count, 2);
   assert.equal(body.products.find(({ id }) => id === 'sku-email').priceInrPaise, 112500);
   assert.equal(body.products.find(({ id }) => id === 'sku-email').priceUsd, 12.5);
-  assert.equal(body.products.find(({ id }) => id === 'sku-email').supplierCostUsdt, '10');
+  const publicProducts = JSON.stringify(body);
+  assert.doesNotMatch(publicProducts, /supplierCostUsdt|your_cost|cost_usdt|reseller.?balance/i);
+  assert.equal(Object.hasOwn(body.products.find(({ id }) => id === 'sku-email'), 'supplierCostUsdt'), false);
   assert.equal(body.products.find(({ id }) => id === 'sku-email').requiresEmail, true);
   assert.equal(body.products.find(({ id }) => id === 'sku-unlimited').unlimited, true);
   const headers = { Origin: 'https://softbazzar-staging.example', 'Content-Type': 'application/json', 'Idempotency-Key': 'checkout_key_1234567890' };
@@ -196,6 +198,17 @@ test('signed UPI observations remain pending until bank review', async () => {
   assert.equal(accepted.status, 200);
   assert.equal((await env.DB.prepare('SELECT status FROM orders WHERE id=?').bind(quote.orderId).first()).status, 'verification_pending');
   assert.equal((await webhook().then((response) => response.json())).duplicate, true);
+  const v1Event = { ...event, deliveryId: 'delivery-v1-123456' };
+  delete v1Event.timestamp;
+  const v1Body = JSON.stringify(v1Event);
+  const v1Signature = `sha256=${createHmac('sha256', env.YOUPI_WEBHOOK_SECRET).update(v1Body).digest('hex')}`;
+  const v1Response = await worker.fetch(request('/api/webhooks/youpi', { method: 'POST', headers: { ...headers, 'X-Gateway-Delivery-Id': v1Event.deliveryId, 'X-Gateway-Signature-V2': '', 'X-Gateway-Signature': v1Signature }, body: v1Body }), env);
+  assert.equal(v1Response.status, 200);
+  const conflictEvent = { ...event, amountPaise: event.amountPaise + 1 };
+  const conflictBody = JSON.stringify(conflictEvent);
+  const conflictSignature = `sha256=${createHmac('sha256', env.YOUPI_WEBHOOK_SECRET).update(`${timestamp}.${conflictBody}`).digest('hex')}`;
+  const conflictDelivery = await worker.fetch(request('/api/webhooks/youpi', { method: 'POST', headers: { ...headers, 'X-Gateway-Signature-V2': conflictSignature }, body: conflictBody }), env);
+  assert.equal(conflictDelivery.status, 409);
   const reconciled = { ...event, deliveryId: 'delivery-234567', event: 'RECONCILED', settlementState: 'RECONCILED' };
   const reconciledBody = JSON.stringify(reconciled);
   const reconciledSignature = `sha256=${createHmac('sha256', env.YOUPI_WEBHOOK_SECRET).update(`${timestamp}.${reconciledBody}`).digest('hex')}`;
@@ -213,6 +226,7 @@ test('signed UPI observations remain pending until bank review', async () => {
   }), env);
   assert.equal(verify.status, 200);
   assert.equal((await env.DB.prepare('SELECT status FROM orders WHERE id=?').bind(quote.orderId).first()).status, 'payment_verified');
+  assert.equal((await webhook().then((response) => response.json())).duplicate, true);
   assert.equal(env.DB.prepare("SELECT COUNT(*) AS count FROM audit_events WHERE event_type='payment_verified'").first().count, 1);
   env.DB.sqlite.close();
 });
