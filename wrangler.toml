@@ -36,7 +36,7 @@ crons = ["*/2 * * * *"]
 [[env.staging.d1_databases]]
 binding = "DB"
 database_name = "softbazzar-staging"
-database_id = "REPLACE_WITH_STAGING_D1_DATABASE_ID"
+database_id = "1c071267-eb89-4ec1-b009-fbdaf3ec731e"
 migrations_dir = "migrations"
 
 [env.staging.vars]
