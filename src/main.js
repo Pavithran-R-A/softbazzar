@@ -145,7 +145,7 @@ function productCards(filter, searchQuery = '') {
     return `<div class="product-card fade-up fade-up-delay-${i%4+1}" data-id="${sanitizeHTML(p.id)}">
     <div class="product-img"><div class="brand-svg">${getIcon(p.icon)}</div></div>
     <div class="product-body"><div class="product-name">${sanitizeHTML(p.name)}</div><div class="product-cat">${sanitizeHTML(p.cat)}</div>
-    <div class="product-pricing"><span class="product-price">${sanitizeHTML(defaultPrice)} INR payment</span>${p.priceUsd ? `<span class="product-usd">≈ $${Number(p.priceUsd).toFixed(2)} USD selling equivalent</span>` : ''}${p.supplierCostUsdt ? `<span class="product-cost">Supplier cost: ${sanitizeHTML(p.supplierCostUsdt)} USDT</span>` : ''}</div>
+    <div class="product-pricing"><span class="product-price">${sanitizeHTML(defaultPrice)} INR payment</span>${p.priceUsd ? `<span class="product-usd">≈ $${Number(p.priceUsd).toFixed(2)} USD selling equivalent</span>` : ''}</div>
     ${p.unlimited ? '<div class="product-cat">Unlimited stock</div>' : Number.isInteger(p.stock) ? `<div class="product-cat">${p.stock === 0 ? 'Out of stock' : p.stock <= 3 ? `Only ${p.stock} available` : `${p.stock} available`}</div>` : ''}
     ${p.requiresEmail ? '<div class="product-cat">Email required for delivery</div>' : ''}
     <button class="btn-buy ripple-btn" data-add="${sanitizeHTML(p.id)}" ${!p.inStock ? 'disabled' : ''}>${cartSvg} ${hasVariants?'Select Options':'Add to Cart'}</button></div></div>`;

@@ -66,7 +66,7 @@ async function publicCatalogue(env) {
   const fxAt = Date.parse(fx?.updated_at||''); const fxStale = !Number.isFinite(fxAt)||Date.now()-fxAt>86400000;
   const products = fx ? rows.results.map((row) => {
     const priced=priceProduct(row.cost_usdt,{usdtInr:fx.usdt_inr,usdtUsd:fx.usdt_usd,updatedAt:fx.updated_at});
-    return {id:row.supplier_id,name:row.name,desc:row.description,cat:row.category||row.type,type:row.type,duration:row.duration,requiresEmail:Boolean(row.requires_email),inStock:Boolean(row.is_unlimited)||row.stock>0,stock:row.is_unlimited?null:row.stock,unlimited:Boolean(row.is_unlimited),supplierCostUsdt:row.cost_usdt,sellingUsdt:priced.sellUsdt,priceNum:priced.priceInrPaise/100,priceInrPaise:priced.priceInrPaise,priceUsd:priced.priceUsd,image:row.image_url,quoteFxUpdatedAt:priced.fxUpdatedAt};
+    return {id:row.supplier_id,name:row.name,desc:row.description,cat:row.category||row.type,type:row.type,duration:row.duration,requiresEmail:Boolean(row.requires_email),inStock:Boolean(row.is_unlimited)||row.stock>0,stock:row.is_unlimited?null:row.stock,unlimited:Boolean(row.is_unlimited),sellingUsdt:priced.sellUsdt,priceNum:priced.priceInrPaise/100,priceInrPaise:priced.priceInrPaise,priceUsd:priced.priceUsd,image:row.image_url,quoteFxUpdatedAt:priced.fxUpdatedAt};
   }) : [];
   return {products,count:products.length,lastSyncAt:latest?.finished_at||null,fxUpdatedAt:fx?.updated_at||null,stale:stale||fxStale,purchasable:!stale&&!fxStale&&Boolean(fx)};
 }
@@ -114,19 +114,22 @@ export default {
       const timestamp=request.headers.get('X-Gateway-Timestamp')||'';const delivery=request.headers.get('X-Gateway-Delivery-Id')||'';const headerEvent=request.headers.get('X-Gateway-Event')||'';
       if(!/^[0-9]{13}$/.test(timestamp)||!/^[A-Za-z0-9-]{8,80}$/.test(delivery))return json({error:'invalid_webhook_headers'},400);
       let rawBody;try{rawBody=new TextDecoder('utf-8',{fatal:true}).decode(rawBytes);}catch{return json({error:'invalid_webhook_body'},400);}
-      let event;try{event=await verifyYoupiWebhook({rawBody,signature:request.headers.get('X-Gateway-Signature-V2')||'',timestamp,secret:env.YOUPI_WEBHOOK_SECRET});}catch{return json({error:'invalid_webhook_signature'},401);}
-      if(event.deliveryId!==delivery||String(event.timestamp)!==timestamp||event.event!==headerEvent||event.method!=='UPI'||typeof event.orderId!=='string'||typeof event.paymentId!=='string'||!Number.isSafeInteger(event.amountPaise))return json({error:'invalid_webhook_payload'},400);
+      let event;try{event=await verifyYoupiWebhook({rawBody,signatureV1:request.headers.get('X-Gateway-Signature')||'',signatureV2:request.headers.get('X-Gateway-Signature-V2')||'',timestamp,secret:env.YOUPI_WEBHOOK_SECRET});}catch{return json({error:'invalid_webhook_signature'},401);}
+      if(event.deliveryId!==delivery||(event.timestamp!==undefined&&String(event.timestamp)!==timestamp)||event.event!==headerEvent||event.method!=='UPI'||typeof event.orderId!=='string'||typeof event.paymentId!=='string'||!Number.isSafeInteger(event.amountPaise))return json({error:'invalid_webhook_payload'},400);
+      const bodyHash=await sha256Hex(rawBytes);
+      const priorDelivery=await env.DB.prepare('SELECT evidence_hash FROM payment_evidence WHERE delivery_id=?').bind(delivery).first();
+      if(priorDelivery)return priorDelivery.evidence_hash===bodyHash?json({received:true,duplicate:true}):json({error:'delivery_id_conflict'},409);
       const order=await env.DB.prepare('SELECT id,total_paise,status FROM orders WHERE id=?').bind(event.orderId).first();
       const attempt=await env.DB.prepare("SELECT id FROM payment_attempts WHERE order_id=? AND gateway='youpi' AND gateway_payment_id=?").bind(event.orderId,event.paymentId).first();
       if(!order||!attempt)return json({error:'payment_not_found'},404);
       if(!['awaiting_payment','verification_pending','manual_review'].includes(order.status))return json({error:'order_not_payable'},409);
       const amountMatches=event.amountPaise===order.total_paise;const nextOrderState=!amountMatches||event.event==='MANUAL_REVIEW'?'manual_review':event.event==='OBSERVED_SUCCESS'||event.event==='RECONCILED'?'verification_pending':order.status;
-      const bodyHash=await sha256Hex(rawBytes);const now=new Date().toISOString();
+      const now=new Date().toISOString();
       try{await env.DB.batch([
         env.DB.prepare('UPDATE payment_attempts SET state=?,updated_at=? WHERE id=?').bind(event.event,now,attempt.id),
         env.DB.prepare('INSERT INTO payment_evidence(id,payment_attempt_id,delivery_id,event_type,verification_source,evidence_hash,received_at) VALUES(?,?,?,?,?,?,?)').bind(crypto.randomUUID(),attempt.id,delivery,event.event,'youpi_signed_webhook',bodyHash,now),
         ...(nextOrderState!==order.status?[env.DB.prepare('UPDATE orders SET status=?,updated_at=? WHERE id=? AND status=?').bind(nextOrderState,now,order.id,order.status)]:[]),
-      ]);}catch(error){if(String(error?.message||'').includes('UNIQUE'))return json({received:true,duplicate:true});throw error;}
+      ]);}catch(error){if(String(error?.message||'').includes('UNIQUE')){const duplicate=await env.DB.prepare('SELECT evidence_hash FROM payment_evidence WHERE delivery_id=?').bind(delivery).first();return duplicate?.evidence_hash===bodyHash?json({received:true,duplicate:true}):json({error:'delivery_id_conflict'},409);}throw error;}
       return json({received:true,verificationPending:true});
     }
     if(url.pathname.startsWith('/api/admin/')){

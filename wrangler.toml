@@ -1,4 +1,5 @@
 name = "softbazzar-storefront"
+account_id = "cdfe06b4a219190fcbd20b647b926b0e"
 main = "src/worker.js"
 compatibility_date = "2026-10-03"
 workers_dev = false
