@@ -26,3 +26,5 @@ dist-ssr
 .vercel
 
 .wrangler/
+test-results/
+playwright-report/

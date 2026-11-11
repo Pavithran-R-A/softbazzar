@@ -7,11 +7,13 @@
     "dev": "vite",
     "cf:dev": "npm run build && wrangler dev",
     "test": "node --experimental-loader ./scripts/asset-loader.mjs --test",
+    "test:browser": "playwright test",
     "build": "npm test && vite build && node --experimental-loader ./scripts/asset-loader.mjs scripts/generate-seo.mjs",
     "build:pages:staging": "npm run build && node scripts/prepare-pages-staging.mjs",
     "preview": "vite preview"
   },
   "devDependencies": {
+    "@playwright/test": "^1.65.0",
     "vite": "^8.3.7"
   }
 }
