@@ -9,6 +9,9 @@ const migrationNames = [
   '0003_financial_guards.sql',
   '0004_catalogue_variants.sql',
   '0005_fx_provenance.sql',
+  '0006_fx_rate_history.sql',
+  '0007_quote_stock_reservations.sql',
+  '0008_fixed_merchant_pricing.sql',
 ];
 
 function database() {

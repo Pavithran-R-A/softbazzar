@@ -21,8 +21,10 @@ export function resolveSelection(id, variantName = null) {
     if (!variant) variant = availableVariants[0];
   }
 
-  const priceNum = Number(variant?.priceNum ?? product.priceNum);
-  if (!Number.isFinite(priceNum) || priceNum < 0) return null;
+  const suppliedPaise=variant?.priceInrPaise??product.priceInrPaise;
+  const priceInrPaise=Number.isSafeInteger(Number(suppliedPaise))?Number(suppliedPaise):Math.round(Number(variant?.priceNum??product.priceNum)*100);
+  if(!Number.isSafeInteger(priceInrPaise)||priceInrPaise<0)return null;
+  const priceNum=priceInrPaise/100;
 
   return {
     id: product.id,
@@ -32,6 +34,7 @@ export function resolveSelection(id, variantName = null) {
     productName: product.name,
     price: variant?.price ?? product.price,
     priceNum,
+    priceInrPaise,
     icon: product.icon,
     cat: product.cat,
     color: product.color,
@@ -68,12 +71,14 @@ export function resolveCartItems(items) {
   return normalizeStoredCart(items).flatMap((item) => {
     const selection = resolveSelection(item.id, item.variantName);
     if (!selection) return [];
-    return [{ ...selection, qty: item.qty, lineTotal: selection.priceNum * item.qty }];
+    const lineTotalPaise=selection.priceInrPaise*item.qty;
+    if(!Number.isSafeInteger(lineTotalPaise))return [];
+    return [{ ...selection, qty: item.qty, lineTotalPaise,lineTotal:lineTotalPaise/100 }];
   });
 }
 
-export function calculateCartTotal(items) {
-  return resolveCartItems(items).reduce((sum, item) => sum + item.lineTotal, 0);
+export function calculateCartTotalPaise(items) {
+  return resolveCartItems(items).reduce((sum, item) => sum + item.lineTotalPaise, 0);
 }
 
 export function readStoredCart(storage = globalThis.localStorage) {

@@ -9,11 +9,11 @@ export function parseProducts(payload) {
     const id = String(row.id); if (seen.has(id)) throw new TypeError('Supplier returned duplicate product IDs'); seen.add(id);
     const unlimited = row.is_unlimited === true || row.is_unlimited === 1 || row.is_unlimited === 'true';
     const requiresEmail = row.requires_email === true || row.requires_email === 1 || row.requires_email === 'true';
-    const costUsdt = String(row.your_cost ?? row.cost ?? row.price_usdt ?? row.price); const cost = Number(costUsdt); const stock = Number(row.stock_quantity ?? row.stock ?? row.quantity);
+    const costUsdt = String(row.your_cost); const cost = Number(costUsdt); const stock = Number(row.stock_quantity ?? row.stock ?? row.quantity);
     if (!/^\d{1,10}(\.\d{1,6})?$/.test(costUsdt) || !Number.isFinite(cost) || cost <= 0 || cost>1000000000 || (!unlimited && (!Number.isSafeInteger(stock) || stock < 0 || stock>10000000))) throw new TypeError(`Supplier product ${id} has invalid pricing or stock`);
     const variants = Array.isArray(row.variants) ? row.variants.map((variant) => {
       if (!variant || (typeof variant.id !== 'string' && typeof variant.id !== 'number') || !String(variant.id).trim() || typeof variant.name !== 'string' || !variant.name.trim()) throw new TypeError(`Supplier product ${id} has invalid variants`);
-      const variantCost = String(variant.your_cost ?? variant.cost ?? variant.price_usdt ?? variant.price);
+      const variantCost = String(variant.your_cost);
       const variantUnlimited = variant.is_unlimited === true || variant.is_unlimited === 1 || variant.is_unlimited === 'true';
       const variantStock = Number(variant.stock_quantity ?? variant.stock ?? variant.quantity);
       if (!/^\d{1,10}(\.\d{1,6})?$/.test(variantCost) || !Number.isFinite(Number(variantCost)) || Number(variantCost) <= 0 || (!variantUnlimited && (!Number.isSafeInteger(variantStock) || variantStock < 0))) throw new TypeError(`Supplier product ${id} has invalid variant pricing or stock`);

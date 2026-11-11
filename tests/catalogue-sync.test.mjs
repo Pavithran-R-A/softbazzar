@@ -24,7 +24,7 @@ test('mock inventory returns isolated, count-checked catalogue data', async () =
 test('supplier envelope rejects failed and partial catalogues', () => {
   assert.throws(() => parseProducts({ success: false, products: [] }), /rejected/);
   assert.throws(() => parseProducts({ success: true, count: 2, products: [{ id: 1, name: 'A', cost: 1, stock: 1 }] }), /count/);
-  assert.equal(parseProducts({ success: true, count: 1, products: [{ id: 1, name: 'A', cost: 1, stock: 1 }] }).length, 1);
+  assert.equal(parseProducts({ success: true, count: 1, products: [{ id: 1, name: 'A', your_cost: 1, stock: 1 }] }).length, 1);
 });
 
 test('catalogue replacement retires old supplier products', () => {
@@ -45,9 +45,9 @@ test('price and stock changes trigger updated sync snapshots', () => {
   assert.equal(plan.imported, 0);
   assert.equal(plan.updated, 1);
   assert.deepEqual(plan.changed.map(({ id }) => id), ['sku-1']);
-  const price = priceProduct('12', { usdtInr: '90', usdtUsd: '1', updatedAt: new Date().toISOString() });
+  const price = priceProduct('12','105');
   assert.equal(price.sellUsdt, 15);
-  assert.equal(price.priceInrPaise, 135000);
+  assert.equal(price.priceInrPaise, 157500);
   assert.equal(price.priceUsd, 15);
 });
 

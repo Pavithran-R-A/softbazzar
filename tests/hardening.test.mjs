@@ -4,14 +4,16 @@ import test from 'node:test';
 import { priceProduct } from '../src/pricing.js';
 import { parseProducts } from '../src/supplier.js';
 import { setCatalogue } from '../src/data.js';
-import { calculateCartTotal, normalizeStoredCart, writeStoredCart } from '../src/cart-model.js';
+import { calculateCartTotalPaise, normalizeStoredCart, writeStoredCart } from '../src/cart-model.js';
 
-test('25 percent markup and dual currency use decimal safe arithmetic', () => {
-  const value = priceProduct('10', { usdtInr: '90', usdtUsd: '1', updatedAt: '2026-11-10T00:00:00.000Z' });
+test('fixed 105 conversion applies exact 25 percent markup', () => {
+  const value = priceProduct('10');
   assert.equal(value.sellUsdt, 12.5);
-  assert.equal(value.priceInrPaise, 112500);
+  assert.equal(value.priceInrPaise, 131250);
   assert.equal(value.priceUsd, 12.5);
-  assert.throws(() => priceProduct('1.1234567', { usdtInr: '90', usdtUsd: '1', updatedAt: '2026-11-10' }));
+  assert.equal(value.usdInr, '105');
+  assert.equal(priceProduct('0.01').priceInrPaise,131);
+  assert.throws(() => priceProduct('1.1234567'));
 });
 
 test('supplier parser prefers reseller cost and rejects duplicate IDs', () => {
@@ -20,15 +22,16 @@ test('supplier parser prefers reseller cost and rejects duplicate IDs', () => {
   assert.equal(rows[0].stock, 3);
   assert.throws(() => parseProducts([{ id: 1, name: 'A', your_cost: 1, stock: 1 }, { id: 1, name: 'B', your_cost: 2, stock: 2 }]), /duplicate/);
   assert.throws(() => parseProducts([{ id: 1, name: 'A', your_cost: -3, stock: 1 }]), /invalid/);
+  assert.throws(() => parseProducts([{id:4,name:'Missing reseller cost',cost:'10',stock:1}]),/invalid/);
   assert.throws(() => parseProducts([{id:2,name:'Unsafe image',your_cost:'1',stock:1,image_url:'http://example.test/item.jpg'}]),/unsafe image/);
   assert.throws(() => parseProducts([{id:3,name:'Bad variant',your_cost:'1',stock:1,variants:[{id:'v',name:'V',your_cost:'-1',stock:2}]}]),/variant/);
 });
 
 test('cart stores supplier IDs and respects current stock', () => {
-  setCatalogue([{ id: 'fixture-1', name: 'Fixture', cat: 'Test', price: '₹10.00', priceNum: 10, inStock: true, stock: 2, unlimited: false }]);
+  setCatalogue([{ id: 'fixture-1', name: 'Fixture', cat: 'Test', price: '₹10.00', priceNum: 10, priceInrPaise:1000, inStock: true, stock: 2, unlimited: false }]);
   const normalized = normalizeStoredCart([{ id: 'fixture-1', qty: 8, priceNum: 0.01 }, { id: 'removed', qty: 1 }]);
   assert.deepEqual(normalized, [{ id: 'fixture-1', variantName: null, qty: 2 }]);
-  assert.equal(calculateCartTotal(normalized), 20);
+  assert.equal(calculateCartTotalPaise(normalized), 2000);
   const values = new Map(); const storage = { setItem(key, value) { values.set(key, value); } };
   assert.equal(writeStoredCart(normalized, storage), true);
   assert.equal(values.get('sb_cart_v2'), '[{"id":"fixture-1","variantName":null,"qty":2}]');

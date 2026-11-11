@@ -1,7 +1,7 @@
 import './index.css';
 import logoUrl from './assets/logo.png';
 import { brandIcons, products, categories, setCatalogue } from './data.js';
-import { calculateCartTotal, normalizeStoredCart, readStoredCart, resolveCartItems, resolveSelection, writeStoredCart } from './cart-model.js';
+import { calculateCartTotalPaise, normalizeStoredCart, readStoredCart, resolveCartItems, resolveSelection, writeStoredCart } from './cart-model.js';
 import { privacyPage, termsPage, TELEGRAM } from './pages.js';
 
 const sanitizeHTML = (str) => typeof str === 'string' ? str.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&#39;"}[m])) : str;
@@ -21,7 +21,6 @@ const savedCartSnapshot = (() => { try { return JSON.parse(localStorage.getItem(
 let cart = readStoredCart();
 let adminToken = '';
 let cataloguePurchasable=false;
-let fxDataProvider=null;
 
 function saveCart() {
   cart = normalizeStoredCart(cart);
@@ -71,7 +70,7 @@ function updateQuantity(id, variantName, delta) {
 }
 
 function getCartTotal() {
-  return calculateCartTotal(cart);
+  return calculateCartTotalPaise(cart)/100;
 }
 
 function updateCartBadge() {
@@ -120,7 +119,7 @@ function renderCartItems() {
     const variantKey = item.variantName || '';
     return `<div class="cart-item" style="animation-delay:${i*0.05}s"><div class="cart-item-icon">${brandIcons[item.icon]||''}</div><div class="cart-item-info"><div class="cart-item-name">${sanitizeHTML(item.displayName)}</div><div class="cart-item-cat">${sanitizeHTML(item.cat)}</div></div>
     <div class="cart-qty-ctrl"><button aria-label="Decrease ${sanitizeHTML(item.displayName)} quantity" class="cart-qty-btn ripple-btn" data-qty-sub="${sanitizeHTML(item.id)}" data-qty-name="${sanitizeHTML(variantKey)}">-</button><span class="cart-qty-val">${item.qty||1}</span><button aria-label="Increase ${sanitizeHTML(item.displayName)} quantity" class="cart-qty-btn ripple-btn" data-qty-add="${sanitizeHTML(item.id)}" data-qty-name="${sanitizeHTML(variantKey)}">+</button></div>
-    <div class="cart-item-price">₹${formatInr(item.lineTotal)}</div><button aria-label="Remove ${sanitizeHTML(item.displayName)}" class="cart-remove ripple-btn" data-remove-id="${sanitizeHTML(item.id)}" data-remove-name="${sanitizeHTML(variantKey)}">${trashSvg}</button></div>`;
+    <div class="cart-item-price">₹${formatInr(item.lineTotalPaise/100)}</div><button aria-label="Remove ${sanitizeHTML(item.displayName)}" class="cart-remove ripple-btn" data-remove-id="${sanitizeHTML(item.id)}" data-remove-name="${sanitizeHTML(variantKey)}">${trashSvg}</button></div>`;
   }).join('');
   const totalEl = document.querySelector('.cart-total-amount');
   const countEl = document.querySelector('.cart-header .cart-count');
@@ -147,12 +146,14 @@ function productCards(filter, searchQuery = '', availability = 'all', sort = 'na
 
   return list.map((p,i) => {
     const activeVariants = p.variants ? p.variants.filter(v => !v.disabled) : null;
-    const defaultPrice = activeVariants && activeVariants.length > 0 ? activeVariants[0].price : p.price;
+    const selectedVariant = activeVariants && activeVariants.length > 0 ? activeVariants[0] : null;
+    const defaultPrice = selectedVariant?.price ?? p.price;
+    const defaultUsd = selectedVariant?.priceUsd ?? p.priceUsd;
     const hasVariants = activeVariants && activeVariants.length > 0;
     return `<div class="product-card fade-up fade-up-delay-${i%4+1}" data-id="${sanitizeHTML(p.id)}">
     <div class="product-img">${p.image?`<img class="product-photo" src="${sanitizeHTML(p.image)}" alt="${sanitizeHTML(p.name)}" loading="lazy" referrerpolicy="no-referrer"/>`:''}<div class="brand-svg">${getIcon(p.icon)}</div></div>
     <div class="product-body"><div class="product-name">${sanitizeHTML(p.name)}</div><div class="product-cat">${sanitizeHTML(p.cat)}</div>
-    <div class="product-pricing"><span class="product-price">${sanitizeHTML(defaultPrice)} INR payment</span>${p.priceUsd ? `<span class="product-usd">≈ $${Number(p.priceUsd).toFixed(2)} USD selling equivalent</span>` : ''}</div>
+    <div class="product-pricing"><span class="product-price">${sanitizeHTML(defaultPrice)} INR</span>${Number.isFinite(Number(defaultUsd)) ? `<span class="product-usd">≈ $${Number(defaultUsd).toFixed(2)} USD (approx.)</span>` : ''}</div>
     ${Array.isArray(p.variants)&&p.variants.length>0 ? `<div class="product-cat">${activeVariants.length?'Choose an available option':'No options currently available'}</div>` : p.unlimited ? '<div class="product-cat">Unlimited stock</div>' : Number.isInteger(p.stock) ? `<div class="product-cat">${p.stock === 0 ? 'Out of stock' : p.stock <= 3 ? `Only ${p.stock} available` : `${p.stock} available`}</div>` : ''}
     ${p.requiresEmail ? '<div class="product-cat">Email required for delivery</div>' : ''}
     <button class="btn-buy ripple-btn" data-add="${sanitizeHTML(p.id)}" ${!p.inStock ? 'disabled' : ''}>${cartSvg} ${hasVariants?'Select Options':'Add to Cart'}</button></div></div>`;
@@ -207,7 +208,6 @@ function footer() {
     </ul></div>
   </div>
   <div class="footer-bottom"><p>&copy; 2026 SoftBazzar. All rights reserved.</p>
-    ${fxDataProvider==='coingecko'?'<a href="https://www.coingecko.com/en/api" target="_blank" rel="noopener noreferrer">Data provided by CoinGecko</a>':''}
     <div class="footer-payment"><span>Checkout currently paused</span></div>
     <div class="footer-socials">
       <a href="${TELEGRAM}" target="_blank" aria-label="Telegram">${telegramSvg}</a>
@@ -268,7 +268,7 @@ function adminPage() {
   return `${navbar()}<main id="main-content"><section class="admin-page"><div class="admin-header"><div><h1>Store operations</h1><p>Private staging diagnostics and controls.</p></div></div><div class="admin-content">
     <form id="adminLogin" class="admin-card"><label for="adminTokenInput">Admin token</label><div class="admin-auth-row"><input id="adminTokenInput" class="admin-input" type="password" autocomplete="current-password" required/><button class="btn-buy" type="submit">Connect securely</button></div><p id="adminMessage" role="status">Token stays in page memory.</p></form>
     <div id="adminDashboard" hidden><div class="admin-card"><h2>Staging health</h2><div id="adminOverview" aria-live="polite">Connect to load diagnostics.</div></div>
-    <div class="admin-card"><h2>Exchange rates</h2><form id="fxForm" class="admin-auth-row"><label>USDT → INR <input id="fxInr" class="admin-input" inputmode="decimal" required/></label><label>USDT → USD <input id="fxUsd" class="admin-input" inputmode="decimal" required/></label><label>Rate source URL <input id="fxSource" class="admin-input" type="url" placeholder="https://source.example/rates" required/></label><button class="btn-buy" type="submit">Save verified rates</button></form></div>
+    <div class="admin-card"><h2>Merchant pricing policy</h2><p>1 USDT ≈ 1 USD. Selling prices add 25%, then convert at this rate.</p><form id="pricingForm" class="admin-auth-row"><label>INR per USD <input id="pricingUsdInr" class="admin-input" inputmode="decimal" required/></label><label>Reason for authorized change <input id="pricingReason" class="admin-input" maxlength="300" minlength="5" required/></label><button class="btn-buy" type="submit">Save pricing rate</button></form><div id="pricingAudit" aria-live="polite"></div></div>
     <div class="admin-card"><h2>Recent supplier syncs</h2><div id="adminSyncRuns"></div><button id="syncNow" class="btn-buy" type="button">Run read-only sync</button></div>
     <div class="admin-card"><h2>Recent orders</h2><div id="adminOrders"></div><p>Payment and purchasing remain disabled.</p></div></div>
   </div></section></main>${footer()}`;
@@ -282,12 +282,13 @@ function detailPage(id) {
   let variantHtml = '';
   if (activeVariants && activeVariants.length > 0) {
     variantHtml = `<div class="product-variants fade-up fade-up-delay-2" id="variantSelector">` + 
-      activeVariants.map((v, i) => `<button class="variant-chip ripple-btn ${i===0?'active':''}" data-vprice="${sanitizeHTML(v.price)}" data-vpricenum="${v.priceNum}" data-vname="${sanitizeHTML(v.name)}">${sanitizeHTML(v.name)}</button>`).join('') +
+      activeVariants.map((v, i) => `<button class="variant-chip ripple-btn ${i===0?'active':''}" data-vprice="${sanitizeHTML(v.price)}" data-vpricenum="${v.priceNum}" data-vusd="${v.priceUsd}" data-vname="${sanitizeHTML(v.name)}">${sanitizeHTML(v.name)}</button>`).join('') +
     `</div>`;
   }
 
   const defaultPrice = activeVariants && activeVariants.length > 0 ? activeVariants[0].price : p.price;
   const defaultPriceNum = activeVariants && activeVariants.length > 0 ? activeVariants[0].priceNum : p.priceNum;
+  const defaultUsd = activeVariants && activeVariants.length > 0 ? activeVariants[0].priceUsd : p.priceUsd;
   const defaultName = activeVariants && activeVariants.length > 0 ? activeVariants[0].name : p.name;
   const relatedProducts=products.filter((product)=>product.id!==p.id&&product.cat===p.cat&&product.inStock).slice(0,3);
   
@@ -303,7 +304,7 @@ function detailPage(id) {
         ${variantHtml}
         <div class="detail-price-row fade-up fade-up-delay-2">
           <span class="detail-current" id="detailCurrentPrice">${defaultPrice}</span>
-          ${p.priceUsd ? `<span class="detail-category">≈ $${Number(p.priceUsd).toFixed(2)} USD</span>` : ''}
+          <span class="detail-category" id="detailUsdPrice">≈ $${Number(defaultUsd).toFixed(2)} USD (approx.)</span>
         </div>
         <p class="detail-desc fade-up fade-up-delay-3">${sanitizeHTML(p.desc)}</p>
         <div class="detail-features fade-up fade-up-delay-4"><h3>Product information</h3><ul>${p.features.map(f=>`<li>${checkSvg} ${sanitizeHTML(f)}</li>`).join('')}</ul></div>
@@ -315,8 +316,8 @@ function detailPage(id) {
 function checkoutPage() {
   const items = resolveCartItems(cart);
   if (!items.length) return '<div class="checkout-page page-transition"><div class="section-inner" style="max-width:700px;margin:0 auto;padding:100px 32px;text-align:center;"><h2>Your cart is empty</h2><p>Add current supplier products first.</p><button class="btn-cta ripple-btn" data-home><span>Browse Products</span></button></div></div>';
-  const rows = items.map((item) => '<div class="co-item"><div class="co-item-info"><span class="co-item-name">' + sanitizeHTML(item.productName) + '</span><span class="co-item-variant">' + sanitizeHTML(item.displayName) + '</span><span class="co-item-qty">Qty: ' + item.qty + '</span></div><span class="co-item-price">₹' + formatInr(item.lineTotal) + '</span></div>').join('');
-  const action=cataloguePurchasable?'<form id="quoteForm"><label for="checkoutEmail">Email for order updates</label><input id="checkoutEmail" type="email" maxlength="254" autocomplete="email"/><button class="detail-buy-btn ripple-btn co-send-btn" type="submit">Create order quote</button><p>Quote only. No payment is collected.</p></form>':'<div class="co-card"><h3>Checkout paused</h3><p>Supplier inventory or exchange rates need a fresh verified update.</p></div><button class="detail-buy-btn ripple-btn co-send-btn" disabled>Order quotes unavailable</button>';
+  const rows = items.map((item) => '<div class="co-item"><div class="co-item-info"><span class="co-item-name">' + sanitizeHTML(item.productName) + '</span><span class="co-item-variant">' + sanitizeHTML(item.displayName) + '</span><span class="co-item-qty">Qty: ' + item.qty + '</span></div><span class="co-item-price">₹' + formatInr(item.lineTotalPaise/100) + '</span></div>').join('');
+  const action=cataloguePurchasable?'<form id="quoteForm"><label for="checkoutEmail">Email for order updates</label><input id="checkoutEmail" type="email" maxlength="254" autocomplete="email"/><button class="detail-buy-btn ripple-btn co-send-btn" type="submit">Create order quote</button><p>Quote only. No payment is collected.</p></form>':'<div class="co-card"><h3>Checkout paused</h3><p>Supplier inventory needs a fresh verified update.</p></div><button class="detail-buy-btn ripple-btn co-send-btn" disabled>Order quotes unavailable</button>';
   return '<div class="checkout-page page-transition"><div class="section-inner" style="max-width:900px;margin:0 auto;padding:100px 32px 80px;"><button class="detail-back ripple-btn" data-home>' + backSvg + ' Back to products</button><h1 class="co-title">Checkout</h1><div class="co-grid"><div class="co-left"><div class="co-card"><h3>Order Summary</h3><div class="co-items">' + rows + '</div><div class="co-total-row"><span>Estimated total</span><span class="co-total">₹' + formatInr(getCartTotal()) + '</span></div></div></div><div class="co-right">' + action + '<p id="quoteMessage" role="status"></p></div></div></div></div>';
 }
 
@@ -420,7 +421,7 @@ function initInteractions() {
 
   const adminLogin=document.getElementById('adminLogin');
   adminLogin?.addEventListener('submit',async(event)=>{event.preventDefault();const input=document.getElementById('adminTokenInput');adminToken=input.value.trim();input.value='';await loadAdminDashboard();});
-  document.getElementById('fxForm')?.addEventListener('submit',async(event)=>{event.preventDefault();if(!adminToken)return;const message=document.getElementById('adminMessage');try{const response=await fetch('/api/admin/fx',{method:'PUT',headers:{Authorization:`Bearer ${adminToken}`,'Content-Type':'application/json'},body:JSON.stringify({usdtInr:document.getElementById('fxInr').value,usdtUsd:document.getElementById('fxUsd').value,sourceUrl:document.getElementById('fxSource').value,updatedAt:new Date().toISOString()})});if(!response.ok)throw new Error('Rate update rejected.');message.textContent='Rates saved with source and current timestamp.';await loadAdminDashboard();}catch(error){message.textContent=error.message;}});
+  document.getElementById('pricingForm')?.addEventListener('submit',async(event)=>{event.preventDefault();if(!adminToken)return;const message=document.getElementById('adminMessage');try{const response=await fetch('/api/admin/pricing',{method:'PUT',headers:{Authorization:`Bearer ${adminToken}`,'Content-Type':'application/json'},body:JSON.stringify({usdInr:document.getElementById('pricingUsdInr').value,reason:document.getElementById('pricingReason').value})});const result=await response.json();if(!response.ok)throw new Error(result.error==='change_reason_required'?'Provide a reason of at least five characters.':'Pricing update rejected.');document.getElementById('pricingReason').value='';message.textContent=result.updated?'Pricing rate saved and audited.':'That pricing rate is already active.';await loadAdminDashboard();}catch(error){message.textContent=error.message;}});
   document.getElementById('syncNow')?.addEventListener('click',async()=>{try{await fetch('/api/admin/sync',{method:'POST',headers:{Authorization:`Bearer ${adminToken}`}});await loadAdminDashboard();}catch{document.getElementById('adminMessage').textContent='Sync request failed.';}});
   document.getElementById('quoteForm')?.addEventListener('submit',createOrderQuote);
   const orderMatch=window.location.pathname.match(/^\/orders\/([0-9a-f-]{36})$/i);if(orderMatch)loadOrderStatus(orderMatch[1]);
@@ -451,14 +452,15 @@ async function loadAdminDashboard(){
   const message=document.getElementById('adminMessage');
   try{
     const headers={Authorization:`Bearer ${adminToken}`};
-    const [overviewResponse,ordersResponse]=await Promise.all([fetch('/api/admin/overview',{headers}),fetch('/api/admin/orders',{headers})]);
-    if(!overviewResponse.ok||!ordersResponse.ok)throw new Error('Admin authentication failed.');
-    const [overview,orders]=await Promise.all([overviewResponse.json(),ordersResponse.json()]);
+    const [overviewResponse,ordersResponse,pricingResponse]=await Promise.all([fetch('/api/admin/overview',{headers}),fetch('/api/admin/orders',{headers}),fetch('/api/admin/pricing',{headers})]);
+    if(!overviewResponse.ok||!ordersResponse.ok||!pricingResponse.ok)throw new Error('Admin authentication failed.');
+    const [overview,orders,pricingData]=await Promise.all([overviewResponse.json(),ordersResponse.json(),pricingResponse.json()]);
     document.getElementById('adminDashboard').hidden=false;
-    document.getElementById('adminOverview').innerHTML=`<div class="admin-row"><span>Supplier key configured</span><strong>${overview.supplierConfigured?'Yes':'No — imports skipped'}</strong></div><div class="admin-row"><span>Live payments / supplier purchases</span><strong>Disabled / Disabled</strong></div><div class="admin-row"><span>Catalogue products</span><strong>${overview.catalogue.active||0} active of ${overview.catalogue.count||0}</strong></div><div class="admin-row"><span>Exchange rate timestamp</span><strong>${sanitizeHTML(overview.fx?.updated_at||'Not configured')}</strong></div>`;
+    document.getElementById('adminOverview').innerHTML=`<div class="admin-row"><span>Supplier key configured</span><strong>${overview.supplierConfigured?'Yes':'No — imports skipped'}</strong></div><div class="admin-row"><span>Live payments / supplier purchases</span><strong>Disabled / Disabled</strong></div><div class="admin-row"><span>Catalogue products</span><strong>${overview.catalogue.active||0} active of ${overview.catalogue.count||0}</strong></div><div class="admin-row"><span>Fixed conversion policy</span><strong>1 USD = ₹${sanitizeHTML(overview.pricing?.usdInr||'105')} · 1 USDT ≈ 1 USD</strong></div>`;
     document.getElementById('adminSyncRuns').innerHTML=overview.syncRuns.map(run=>`<div class="admin-row"><span>${sanitizeHTML(run.status)} · ${sanitizeHTML(run.started_at)}</span><span>${sanitizeHTML(run.error_code||`${run.imported} imported, ${run.updated} updated`)}</span></div>`).join('')||'<p>No sync attempts recorded.</p>';
     document.getElementById('adminOrders').innerHTML=orders.orders.map(order=>`<div class="admin-row"><span>${sanitizeHTML(order.id)} · ${sanitizeHTML(order.status)}</span><span>${sanitizeHTML(order.customer_email||'No email')} · ₹${formatInr(order.total_paise/100)}</span></div>`).join('')||'<p>No orders recorded.</p>';
-    if(overview.fx){document.getElementById('fxInr').value=overview.fx.usdt_inr;document.getElementById('fxUsd').value=overview.fx.usdt_usd;document.getElementById('fxSource').value=overview.fx.source_url||'';}
+    document.getElementById('pricingUsdInr').value=pricingData.pricing?.usdInr||'105';
+    document.getElementById('pricingAudit').innerHTML=pricingData.history.map(row=>`<div class="admin-row"><span>₹${sanitizeHTML(row.previousUsdInr||'—')} → ₹${sanitizeHTML(row.usdInr)} · ${sanitizeHTML(row.reason)}</span><span>${sanitizeHTML(row.changedAt)} · ${sanitizeHTML(row.changedBy)}</span></div>`).join('');
     message.textContent='Connected. Token remains in page memory.';
   }catch(error){adminToken='';document.getElementById('adminDashboard').hidden=true;message.textContent=error.message;}
 }
@@ -488,9 +490,11 @@ document.addEventListener('click', e => {
     parent.querySelectorAll('.variant-chip').forEach(c => c.classList.remove('active'));
     variantBtn.classList.add('active');
     
-    const { vprice, vpricenum, vname } = variantBtn.dataset;
+    const { vprice, vpricenum, vusd, vname } = variantBtn.dataset;
     const priceEl = parent.querySelector('#detailCurrentPrice');
     if (priceEl) priceEl.textContent = vprice;
+    const usdPriceEl=parent.querySelector('#detailUsdPrice');
+    if(usdPriceEl)usdPriceEl.textContent=`≈ $${Number(vusd).toFixed(2)} USD (approx.)`;
     
     const addBtn = parent.querySelector('#detailBuyBtn');
     if (addBtn) {
@@ -574,7 +578,6 @@ render();
 fetch('/api/catalogue').then((response) => response.ok ? response.json() : Promise.reject(new Error('catalogue unavailable'))).then((catalogue) => {
   if (!Array.isArray(catalogue.products)) throw new Error('invalid catalogue');
   cataloguePurchasable=Boolean(catalogue.purchasable);
-  fxDataProvider=catalogue.fxProvider;
   setCatalogue(catalogue.products.map((product) => ({ ...product, variants:product.variants.map((variant)=>({...variant,priceNum:variant.priceInrPaise/100,price:`₹${(variant.priceInrPaise/100).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}`,disabled:!variant.inStock})), priceNum: product.priceInrPaise / 100, icon: Object.keys(brandIcons).find((key) => key === product.name.toLowerCase().split(/[^a-z0-9]+/)[0]), color: '#7967ef', price: `₹${(product.priceInrPaise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, inStock: product.inStock && catalogue.purchasable, features: [product.duration, product.requiresEmail ? 'Email required for delivery' : null, product.type].filter(Boolean) })));
   const retainedCart = normalizeStoredCart(savedCartSnapshot);
   cart = retainedCart;

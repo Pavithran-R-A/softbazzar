@@ -17,7 +17,7 @@ class SqliteD1 {
   constructor() {
     this.sqlite = new DatabaseSync(':memory:');
     this.sqlite.exec('PRAGMA foreign_keys = ON;');
-    for (const migration of ['0001_init.sql', '0002_orders_payments.sql', '0003_financial_guards.sql', '0004_catalogue_variants.sql', '0005_fx_provenance.sql', '0006_fx_rate_history.sql', '0007_quote_stock_reservations.sql']) {
+    for (const migration of ['0001_init.sql', '0002_orders_payments.sql', '0003_financial_guards.sql', '0004_catalogue_variants.sql', '0005_fx_provenance.sql', '0006_fx_rate_history.sql', '0007_quote_stock_reservations.sql', '0008_fixed_merchant_pricing.sql']) {
       this.sqlite.exec(readFileSync(new URL(`../migrations/${migration}`, import.meta.url), 'utf8'));
     }
   }
@@ -42,8 +42,6 @@ const rows = [
 
 async function createEnv() {
   const DB = new SqliteD1();
-  await DB.prepare('INSERT INTO fx_rates(id,usdt_inr,usdt_usd,updated_at,updated_by) VALUES(1,?,?,?,?)')
-    .bind('90', '1', new Date().toISOString(), 'test').run();
   return {
     DB,
     ASSETS: { fetch: async () => new Response('<!doctype html><html><head><title>SoftBazzar</title><meta name="description" content="base"><link rel="canonical" href="https://example.test/"></head><body></body></html>') },
@@ -108,17 +106,21 @@ test('catalogue preserves safe imagery and variants without exposing costs', asy
   const body=await response.json();
   assert.equal(body.products[0].image,'https://images.example.test/item.webp');
   assert.deepEqual(body.products[0].variants.map(({id,inStock,priceInrPaise})=>({id,inStock,priceInrPaise})),[
-    {id:'monthly',inStock:true,priceInrPaise:22500},{id:'annual',inStock:false,priceInrPaise:112500},
+    {id:'monthly',inStock:true,priceInrPaise:26250},{id:'annual',inStock:false,priceInrPaise:131250},
   ]);
   assert.doesNotMatch(JSON.stringify(body),/costUsdt|your_cost|cost_usdt|supplierCost/i);
   const quoteResponse=await worker.fetch(request('/api/orders',{method:'POST',headers:{Origin:'https://softbazzar-staging.example','Content-Type':'application/json','Idempotency-Key':'variant_quote_key_123456'},body:JSON.stringify({customerEmail:'buyer@example.com',items:[{productId:'sku-email',variantId:'monthly',quantity:1}]})}),env);
   assert.equal(quoteResponse.status,201);
   const quote=await quoteResponse.json();
-  assert.equal(quote.totalPaise,22500);
-  const variantLine=await env.DB.prepare('SELECT supplier_variant_id,name_snapshot,supplier_cost_usdt FROM order_lines WHERE order_id=?').bind(quote.orderId).first();
+  assert.equal(quote.totalPaise,26250);
+  const variantLine=await env.DB.prepare('SELECT id,supplier_variant_id,name_snapshot,supplier_cost_usdt FROM order_lines WHERE order_id=?').bind(quote.orderId).first();
   assert.equal(variantLine.supplier_variant_id,'monthly');
   assert.equal(variantLine.name_snapshot,'Email product — Monthly');
   assert.equal(variantLine.supplier_cost_usdt,'2');
+  const quoteSnapshot=await env.DB.prepare('SELECT total_paise,merchant_usd_inr,fx_usdt_inr,fx_usdt_usd FROM orders WHERE id=?').bind(quote.orderId).first();
+  assert.deepEqual({...quoteSnapshot},{total_paise:26250,merchant_usd_inr:'105',fx_usdt_inr:'105',fx_usdt_usd:'1'});
+  const linePricing=await env.DB.prepare('SELECT merchant_usd_inr,unit_price_paise,approx_usd_cents FROM pricing_snapshots WHERE order_line_id=?').bind(variantLine.id).first();
+  assert.deepEqual({...linePricing},{merchant_usd_inr:'105',unit_price_paise:26250,approx_usd_cents:250});
   const quoteWith = (key, item) => worker.fetch(request('/api/orders',{method:'POST',headers:{Origin:'https://softbazzar-staging.example','Content-Type':'application/json','Idempotency-Key':key},body:JSON.stringify({customerEmail:'buyer@example.com',items:[item]})}),env);
   const missing=await quoteWith('variant_missing_key_123456',{productId:'sku-email',quantity:1});
   assert.equal(missing.status,400);
@@ -151,12 +153,28 @@ test('admin monitoring is protected and exposes operational views', async()=>{
   assert.equal(data.syncRuns[0].status,'skipped');
   const runs=await worker.fetch(request('/api/admin/sync-runs',{headers}),env);
   assert.equal((await runs.json()).syncRuns.length,1);
-  const fx=await worker.fetch(request('/api/admin/fx',{headers}),env);
-  assert.equal((await fx.json()).fx.usdtInr,'90');
-  const invalidFx=await worker.fetch(request('/api/admin/fx',{method:'PUT',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify({usdtInr:'90',usdtUsd:'1',sourceUrl:'http://rates.example',updatedAt:new Date().toISOString()})}),env);
-  assert.equal(invalidFx.status,405);
-  const fxHistory=await (await worker.fetch(request('/api/admin/fx',{headers}),env)).json();
-  assert.equal(fxHistory.history.length,0);
+  const pricing=await worker.fetch(request('/api/admin/pricing',{headers}),env);
+  assert.equal((await pricing.json()).pricing.usdInr,'105');
+  const changed=await worker.fetch(request('/api/admin/pricing',{method:'PUT',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify({usdInr:'106',reason:'Owner-approved pricing test'})}),env);
+  assert.equal(changed.status,200);
+  const history=await (await worker.fetch(request('/api/admin/pricing',{headers}),env)).json();
+  assert.equal(history.history[0].previousUsdInr,'105');
+  assert.equal(history.history[0].usdInr,'106');
+  const tooShort=await worker.fetch(request('/api/admin/pricing',{method:'PUT',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify({usdInr:'107',reason:'ok'})}),env);
+  assert.equal(tooShort.status,400);
+  env.DB.sqlite.close();
+});
+
+test('large cart quantities use paise-safe fixed conversion',async()=>{
+  const env=await createEnv();
+  await synchronize(env,async()=>supplierResponse(rows));
+  const quote=await worker.fetch(request('/api/orders',{method:'POST',headers:{Origin:'https://softbazzar-staging.example','Content-Type':'application/json','Idempotency-Key':'large_quantity_fixed_rate'},body:JSON.stringify({items:[{productId:'sku-unlimited',quantity:99}]})}),env);
+  assert.equal(quote.status,201);
+  const result=await quote.json();
+  assert.equal(result.totalPaise,1624194);
+  const stored=await env.DB.prepare('SELECT total_paise,merchant_usd_inr FROM orders WHERE id=?').bind(result.orderId).first();
+  assert.equal(stored.total_paise,16406*99);
+  assert.equal(stored.merchant_usd_inr,'105');
   env.DB.sqlite.close();
 });
 
@@ -166,7 +184,7 @@ test('catalogue, required email, stock, quote locking, and expiry', async () => 
   const catalogue = await worker.fetch(request('/api/catalogue'), env);
   const body = await catalogue.json();
   assert.equal(body.count, 2);
-  assert.equal(body.products.find(({ id }) => id === 'sku-email').priceInrPaise, 112500);
+  assert.equal(body.products.find(({ id }) => id === 'sku-email').priceInrPaise, 131250);
   assert.equal(body.products.find(({ id }) => id === 'sku-email').priceUsd, 12.5);
   const publicProducts = JSON.stringify(body);
   assert.doesNotMatch(publicProducts, /supplierCostUsdt|your_cost|cost_usdt|reseller.?balance/i);
@@ -186,7 +204,7 @@ test('catalogue, required email, stock, quote locking, and expiry', async () => 
   const first = await create();
   const quote = await first.json();
   assert.equal(first.status, 201);
-  assert.equal(quote.totalPaise, 112500);
+  assert.equal(quote.totalPaise, 131250);
   const repeated = await create();
   assert.equal((await repeated.json()).orderId, quote.orderId);
   const parallelHeaders={...headers,'Idempotency-Key':'parallel_quote_key_12345'};
@@ -203,7 +221,7 @@ test('catalogue, required email, stock, quote locking, and expiry', async () => 
   assert.equal((await conflict.json()).error, 'idempotency_conflict');
   const expiredKey = 'expired_key_1234567890';
   const requestHash = createHash('sha256').update(JSON.stringify({ email: 'person@example.com', items: [['sku-email', 1]] })).digest('hex');
-  await env.DB.prepare("INSERT INTO orders(id,idempotency_key,request_hash,status,customer_email,currency,total_paise,fx_usdt_inr,fx_usdt_usd,quote_expires_at,created_at,updated_at) VALUES('expired-order',?,?,'quoted','person@example.com','INR',112500,'90','1',?,?,?)")
+  await env.DB.prepare("INSERT INTO orders(id,idempotency_key,request_hash,status,customer_email,currency,total_paise,fx_usdt_inr,fx_usdt_usd,quote_expires_at,created_at,updated_at,merchant_usd_inr) VALUES('expired-order',?,?,'quoted','person@example.com','INR',131250,'105','1',?,?,?,'105')")
     .bind(expiredKey, requestHash, new Date(Date.now() - 1000).toISOString(), new Date().toISOString(), new Date().toISOString()).run();
   const expired = await worker.fetch(request('/api/orders', { method: 'POST', headers: { ...headers, 'Idempotency-Key': expiredKey }, body: JSON.stringify({ customerEmail: 'person@example.com', items: [{ productId: 'sku-email', quantity: 1 }] }) }), env);
   assert.equal(expired.status, 410);
@@ -231,17 +249,18 @@ test('stale catalogue disables quote creation and live routes', async () => {
   env.DB.sqlite.close();
 });
 
-test('stale FX disables catalogue purchasing and new quotes', async()=>{
+test('legacy exchange-rate rows cannot block fixed pricing', async()=>{
   const env=await createEnv();
   await synchronize(env,async()=>supplierResponse(rows));
-  await env.DB.prepare('UPDATE fx_rates SET updated_at=? WHERE id=1').bind(new Date(Date.now()-16*60_000).toISOString()).run();
+  await env.DB.prepare('INSERT INTO fx_rates(id,usdt_inr,usdt_usd,updated_at,updated_by) VALUES(1,?,?,?,?)').bind('1','0.5',new Date(Date.now()-365*86400000).toISOString(),'legacy').run();
   const catalogue=await worker.fetch(request('/api/catalogue'),env);
   const state=await catalogue.json();
-  assert.equal(state.stale,true);
-  assert.equal(state.purchasable,false);
+  assert.equal(state.stale,false);
+  assert.equal(state.purchasable,true);
+  assert.equal(state.products.find(({id})=>id==='sku-email').priceInrPaise,131250);
   const quote=await worker.fetch(request('/api/orders',{method:'POST',headers:{Origin:'https://softbazzar-staging.example','Content-Type':'application/json','Idempotency-Key':'expired_fx_quote_key123'},body:JSON.stringify({customerEmail:'buyer@example.com',items:[{productId:'sku-email',quantity:1}]})}),env);
-  assert.equal(quote.status,503);
-  assert.equal((await quote.json()).error,'catalogue_stale');
+  assert.equal(quote.status,201);
+  assert.equal((await quote.json()).totalPaise,131250);
   env.DB.sqlite.close();
 });
 

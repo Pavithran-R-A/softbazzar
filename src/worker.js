@@ -1,8 +1,7 @@
-import { priceProduct } from './pricing.js';
+import { priceProduct, DEFAULT_USD_INR } from './pricing.js';
 import { verifyYoupiWebhook } from './payment.js';
 import { parseProducts, supplierRequest } from './supplier.js';
 import { reconcileCatalogue } from './catalogue-sync.js';
-import { refreshFx, FX_MAX_AGE_MS } from './fx.js';
 
 const json = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options':'DENY', 'X-Robots-Tag':'noindex, nofollow', 'Referrer-Policy':'strict-origin-when-cross-origin', 'Permissions-Policy':'camera=(), microphone=(), geolocation=()', 'Strict-Transport-Security':'max-age=31536000; includeSubDomains' } });
 function secure(response, env) {
@@ -65,25 +64,24 @@ export async function synchronize(env, fetchImpl = fetch) {
 }
 
 async function publicCatalogue(env) {
-  const [rows, fx, latest] = await Promise.all([
+  const [rows, pricing, latest] = await Promise.all([
     env.DB.prepare('SELECT p.supplier_id,p.name,p.description,p.cost_usdt,p.stock,p.is_unlimited,p.duration,p.requires_email,p.type,p.variants_json,pp.category,pp.image_url FROM products p LEFT JOIN product_presentation pp ON pp.supplier_id=p.supplier_id WHERE p.active=1 ORDER BY p.name').all(),
-    env.DB.prepare('SELECT usdt_inr,usdt_usd,updated_at FROM fx_rates WHERE id=1').first(),
+    env.DB.prepare('SELECT usd_inr,updated_at FROM merchant_pricing_settings WHERE id=1').first(),
     env.DB.prepare("SELECT finished_at FROM sync_runs WHERE status='success' ORDER BY id DESC LIMIT 1").first(),
   ]);
   const staleMs = Number(env.STALE_CATALOGUE_MINUTES||10)*60000; const syncAt = Date.parse(latest?.finished_at||''); const stale = !Number.isFinite(syncAt)||Date.now()-syncAt>staleMs;
-  const fxAt = Date.parse(fx?.updated_at||''); const fxStale = !Number.isFinite(fxAt)||Date.now()-fxAt>FX_MAX_AGE_MS;
-  const products = fx ? rows.results.map((row) => {
-    const priced=priceProduct(row.cost_usdt,{usdtInr:fx.usdt_inr,usdtUsd:fx.usdt_usd,updatedAt:fx.updated_at});
-    const variants = JSON.parse(row.variants_json||'[]').map((variant)=>{const variantPrice=priceProduct(variant.costUsdt,{usdtInr:fx.usdt_inr,usdtUsd:fx.usdt_usd,updatedAt:fx.updated_at});return{id:variant.id,name:variant.name,inStock:Boolean(variant.unlimited)||variant.stock>0,stock:variant.unlimited?null:variant.stock,unlimited:variant.unlimited,priceInrPaise:variantPrice.priceInrPaise,priceUsd:variantPrice.priceUsd};});
+  const usdInr=pricing?.usd_inr||DEFAULT_USD_INR;
+  const products = rows.results.map((row) => {
+    const priced=priceProduct(row.cost_usdt,usdInr);
+    const variants = JSON.parse(row.variants_json||'[]').map((variant)=>{const variantPrice=priceProduct(variant.costUsdt,usdInr);return{id:variant.id,name:variant.name,inStock:Boolean(variant.unlimited)||variant.stock>0,stock:variant.unlimited?null:variant.stock,unlimited:variant.unlimited,priceInrPaise:variantPrice.priceInrPaise,priceUsd:variantPrice.priceUsd};});
     const hasVariantInventory=variants.length>0;
-    return {id:row.supplier_id,name:row.name,desc:row.description,cat:row.category||row.type,type:row.type,duration:row.duration,requiresEmail:Boolean(row.requires_email),inStock:hasVariantInventory?variants.some((variant)=>variant.inStock):Boolean(row.is_unlimited)||row.stock>0,stock:row.is_unlimited?null:row.stock,unlimited:Boolean(row.is_unlimited),sellingUsdt:priced.sellUsdt,priceNum:priced.priceInrPaise/100,priceInrPaise:priced.priceInrPaise,priceUsd:priced.priceUsd,image:row.image_url,variants,quoteFxUpdatedAt:priced.fxUpdatedAt};
-  }) : [];
-  const fxProvider=fx?.source_url==='https://api.coingecko.com/api/v3/simple/price'?'coingecko':null;
-  return {products,count:products.length,lastSyncAt:latest?.finished_at||null,fxUpdatedAt:fx?.updated_at||null,fxProvider,stale:stale||fxStale,purchasable:!stale&&!fxStale&&Boolean(fx)};
+    return {id:row.supplier_id,name:row.name,desc:row.description,cat:row.category||row.type,type:row.type,duration:row.duration,requiresEmail:Boolean(row.requires_email),inStock:hasVariantInventory?variants.some((variant)=>variant.inStock):Boolean(row.is_unlimited)||row.stock>0,stock:row.is_unlimited?null:row.stock,unlimited:Boolean(row.is_unlimited),sellingUsdt:priced.sellUsdt,sellingUsd:priced.sellingUsd,priceNum:priced.priceInrPaise/100,priceInrPaise:priced.priceInrPaise,priceUsd:priced.priceUsd,usdInr,image:row.image_url,variants};
+  });
+  return {products,count:products.length,lastSyncAt:latest?.finished_at||null,pricing:{usdInr,updatedAt:pricing?.updated_at||null},stale,purchasable:!stale};
 }
 
 export default {
-  async scheduled(_event,env,ctx){ctx.waitUntil(Promise.all([refreshFx(env),synchronize(env)]));},
+  async scheduled(_event,env,ctx){ctx.waitUntil(synchronize(env));},
   async fetch(request,env){
     const url=new URL(request.url);
     if(url.pathname==='/api/health'&&request.method==='GET')return json({ok:true,supplierConfigured:Boolean(env.AITOOLSHOP_API_KEY),youpiConfigured:Boolean(env.YOUPI_GATEWAY_URL&&env.YOUPI_MERCHANT_ID&&env.YOUPI_MERCHANT_API_KEY),livePaymentsEnabled:false,supplierPurchasesEnabled:false});
@@ -112,17 +110,18 @@ export default {
       const existing=await env.DB.prepare('SELECT id,status,total_paise,quote_expires_at,request_hash FROM orders WHERE idempotency_key=?').bind(idempotencyKey).first();
       if(existing){if(existing.request_hash!==requestHash)return json({error:'idempotency_conflict'},409);if(existing.status==='quoted'&&Date.parse(existing.quote_expires_at)<=Date.now()){await env.DB.prepare("UPDATE orders SET status='cancelled',updated_at=? WHERE id=? AND status='quoted'").bind(new Date().toISOString(),existing.id).run();return json({error:'quote_expired'},410);}return json({orderId:existing.id,status:existing.status,totalPaise:existing.total_paise,expiresAt:existing.quote_expires_at});}
       const catalogue=await publicCatalogue(env);if(!catalogue.purchasable)return json({error:'catalogue_stale'},503);
+      const pricing=await env.DB.prepare('SELECT usd_inr,updated_at FROM merchant_pricing_settings WHERE id=1').first();if(!pricing)return json({error:'pricing_unavailable'},503);
       const ids=[...new Set([...requested.values()].map((item)=>item.productId))];const sqlIds=ids.map(()=>'?').join(',');
-      const rows=await env.DB.prepare(`SELECT p.supplier_id,p.name,p.cost_usdt,p.stock,p.is_unlimited,p.requires_email,p.variants_json,f.usdt_inr,f.usdt_usd,f.updated_at AS fx_updated_at FROM products p JOIN fx_rates f ON f.id=1 WHERE p.active=1 AND p.supplier_id IN (${sqlIds})`).bind(...ids).all();
+      const rows=await env.DB.prepare(`SELECT p.supplier_id,p.name,p.cost_usdt,p.stock,p.is_unlimited,p.requires_email,p.variants_json FROM products p WHERE p.active=1 AND p.supplier_id IN (${sqlIds})`).bind(...ids).all();
       if(rows.results.length!==ids.length)return json({error:'product_unavailable'},409);
       const rowMap=new Map(rows.results.map((row)=>[row.supplier_id,row]));
       for(const item of requested.values()){const row=rowMap.get(item.productId);const variants=JSON.parse(row.variants_json||'[]');if(variants.length&&!item.variantId)return json({error:'variant_required'},400);if(item.variantId){const variant=variants.find((entry)=>entry.id===item.variantId);if(!variant)return json({error:'variant_unavailable'},409);if(!variant.unlimited&&variant.stock<item.quantity)return json({error:'insufficient_stock'},409);if(!/^\d{1,5}(\.\d{1,6})?$/.test(String(variant.costUsdt))||Number(variant.costUsdt)<=0)return json({error:'variant_price_unavailable'},409);}else if(!row.is_unlimited&&row.stock<item.quantity)return json({error:'insufficient_stock'},409);}
       if(rows.results.some((row)=>row.requires_email)&&!email)return json({error:'customer_email_required'},400);
       const orderId=crypto.randomUUID();const now=new Date().toISOString();const expiresAt=new Date(Date.now()+5*60000).toISOString();let totalPaise=0;
-      const lines=[...requested.values()].map((item)=>{const row=rowMap.get(item.productId);const variant=item.variantId?JSON.parse(row.variants_json||'[]').find((entry)=>entry.id===item.variantId):null;const cost=variant?.costUsdt||row.cost_usdt;const price=priceProduct(cost,{usdtInr:row.usdt_inr,usdtUsd:row.usdt_usd,updatedAt:row.fx_updated_at});const lineTotal=price.priceInrPaise*item.quantity;if(!Number.isSafeInteger(lineTotal))throw new RangeError('quote_total_invalid');totalPaise+=lineTotal;return{row,variant,quantity:item.quantity,price,cost,lineId:crypto.randomUUID()};});
+      const lines=[...requested.values()].map((item)=>{const row=rowMap.get(item.productId);const variant=item.variantId?JSON.parse(row.variants_json||'[]').find((entry)=>entry.id===item.variantId):null;const cost=variant?.costUsdt||row.cost_usdt;const price=priceProduct(cost,pricing.usd_inr);const lineTotal=price.priceInrPaise*item.quantity;if(!Number.isSafeInteger(lineTotal))throw new RangeError('quote_total_invalid');totalPaise+=lineTotal;return{row,variant,quantity:item.quantity,price,cost,lineId:crypto.randomUUID()};});
       if(!Number.isSafeInteger(totalPaise)||totalPaise<=0)return json({error:'quote_total_invalid'},400);
-      const stmts=[env.DB.prepare('DELETE FROM quote_stock_reservations WHERE expires_at<=?').bind(now),env.DB.prepare("INSERT INTO orders(id,idempotency_key,request_hash,status,customer_email,currency,total_paise,fx_usdt_inr,fx_usdt_usd,quote_expires_at,created_at,updated_at) VALUES(?,?,?,'quoted',?,'INR',?,?,?,?,?,?)").bind(orderId,idempotencyKey,requestHash,email||null,totalPaise,rows.results[0].usdt_inr,rows.results[0].usdt_usd,expiresAt,now,now)];
-      for(const line of lines){stmts.push(env.DB.prepare('INSERT INTO order_lines(id,order_id,supplier_product_id,name_snapshot,quantity,unit_price_paise,supplier_cost_usdt,supplier_idempotency_key,supplier_variant_id) VALUES(?,?,?,?,?,?,?,?,?)').bind(line.lineId,orderId,line.row.supplier_id,line.variant?`${line.row.name} — ${line.variant.name}`:line.row.name,line.quantity,line.price.priceInrPaise,String(line.cost),`softbazzar-${line.lineId}`,line.variant?.id||null));stmts.push(env.DB.prepare('INSERT INTO pricing_snapshots(order_line_id,selling_usdt,fx_usdt_inr,fx_usdt_usd,quote_fx_updated_at,unit_price_paise,approx_usd_cents,created_at) VALUES(?,?,?,?,?,?,?,?)').bind(line.lineId,String(line.price.sellUsdt),line.row.usdt_inr,line.row.usdt_usd,line.price.fxUpdatedAt,line.price.priceInrPaise,Math.round(line.price.priceUsd*100),now));stmts.push(env.DB.prepare('INSERT INTO quote_stock_reservations(order_line_id,order_id,supplier_id,variant_id,quantity,expires_at) VALUES(?,?,?,?,?,?)').bind(line.lineId,orderId,line.row.supplier_id,line.variant?.id||'',line.quantity,expiresAt));}
+      const stmts=[env.DB.prepare('DELETE FROM quote_stock_reservations WHERE expires_at<=?').bind(now),env.DB.prepare("INSERT INTO orders(id,idempotency_key,request_hash,status,customer_email,currency,total_paise,fx_usdt_inr,fx_usdt_usd,quote_expires_at,created_at,updated_at,merchant_usd_inr) VALUES(?,?,?,'quoted',?,'INR',?,?,?,?,?,?,?)").bind(orderId,idempotencyKey,requestHash,email||null,totalPaise,pricing.usd_inr,'1',expiresAt,now,now,pricing.usd_inr)];
+      for(const line of lines){stmts.push(env.DB.prepare('INSERT INTO order_lines(id,order_id,supplier_product_id,name_snapshot,quantity,unit_price_paise,supplier_cost_usdt,supplier_idempotency_key,supplier_variant_id) VALUES(?,?,?,?,?,?,?,?,?)').bind(line.lineId,orderId,line.row.supplier_id,line.variant?`${line.row.name} — ${line.variant.name}`:line.row.name,line.quantity,line.price.priceInrPaise,String(line.cost),`softbazzar-${line.lineId}`,line.variant?.id||null));stmts.push(env.DB.prepare('INSERT INTO pricing_snapshots(order_line_id,selling_usdt,fx_usdt_inr,fx_usdt_usd,quote_fx_updated_at,unit_price_paise,approx_usd_cents,created_at,merchant_usd_inr) VALUES(?,?,?,?,?,?,?,?,?)').bind(line.lineId,String(line.price.sellUsdt),pricing.usd_inr,'1',pricing.updated_at,line.price.priceInrPaise,Math.round(line.price.priceUsd*100),now,pricing.usd_inr));stmts.push(env.DB.prepare('INSERT INTO quote_stock_reservations(order_line_id,order_id,supplier_id,variant_id,quantity,expires_at) VALUES(?,?,?,?,?,?)').bind(line.lineId,orderId,line.row.supplier_id,line.variant?.id||'',line.quantity,expiresAt));}
       try{await env.DB.batch(stmts);}catch(error){if(String(error?.message||'').includes('quote_stock_unavailable'))return json({error:'insufficient_stock'},409);const duplicate=await env.DB.prepare('SELECT id,status,total_paise,quote_expires_at FROM orders WHERE idempotency_key=?').bind(idempotencyKey).first();if(duplicate)return json({orderId:duplicate.id,status:duplicate.status,totalPaise:duplicate.total_paise,expiresAt:duplicate.quote_expires_at});throw error;}
       return json({orderId,status:'quoted',currency:'INR',totalPaise,expiresAt},201);
     }
@@ -157,13 +156,13 @@ export default {
       if(!env.ADMIN_TOKEN||!safeEqual(auth,env.ADMIN_TOKEN))return json({error:'unauthorized'},401);
       if(url.pathname==='/api/admin/sync'&&request.method==='POST')return json(await synchronize(env));
       if(url.pathname==='/api/admin/overview'&&request.method==='GET'){
-        const [catalogue,fx,runs,orders]=await Promise.all([
+        const [catalogue,pricing,runs,orders]=await Promise.all([
           env.DB.prepare('SELECT COUNT(*) AS count,SUM(CASE WHEN active=1 THEN 1 ELSE 0 END) AS active,SUM(CASE WHEN active=1 AND is_unlimited=0 AND stock=0 THEN 1 ELSE 0 END) AS depleted FROM products').first(),
-          env.DB.prepare('SELECT usdt_inr,usdt_usd,updated_at,updated_by FROM fx_rates WHERE id=1').first(),
+          env.DB.prepare('SELECT usd_inr AS usdInr,updated_at AS updatedAt,updated_by AS updatedBy FROM merchant_pricing_settings WHERE id=1').first(),
           env.DB.prepare('SELECT id,started_at,finished_at,status,imported,updated,error_code FROM sync_runs ORDER BY id DESC LIMIT 20').all(),
           env.DB.prepare('SELECT status,COUNT(*) AS count FROM orders GROUP BY status').all(),
         ]);
-        return json({supplierConfigured:Boolean(env.AITOOLSHOP_API_KEY),livePaymentsEnabled:false,supplierPurchasesEnabled:false,catalogue,fx,syncRuns:runs.results,orders:orders.results});
+        return json({supplierConfigured:Boolean(env.AITOOLSHOP_API_KEY),livePaymentsEnabled:false,supplierPurchasesEnabled:false,catalogue,pricing,syncRuns:runs.results,orders:orders.results});
       }
       if(url.pathname==='/api/admin/orders'&&request.method==='GET'){
         const orders=await env.DB.prepare('SELECT id,status,currency,total_paise,customer_email,created_at,updated_at FROM orders ORDER BY created_at DESC LIMIT 100').all();
@@ -173,7 +172,7 @@ export default {
         const runs=await env.DB.prepare('SELECT id,started_at,finished_at,status,imported,updated,error_code FROM sync_runs ORDER BY id DESC LIMIT 100').all();
         return json({syncRuns:runs.results});
       }
-      if(url.pathname==='/api/admin/fx'&&request.method==='GET')return json({fx:await env.DB.prepare('SELECT usdt_inr AS usdtInr,usdt_usd AS usdtUsd,updated_at AS updatedAt,updated_by AS updatedBy,source_url AS sourceUrl FROM fx_rates WHERE id=1').first(),history:(await env.DB.prepare('SELECT usdt_inr AS usdtInr,usdt_usd AS usdtUsd,source_url AS sourceUrl,observed_at AS observedAt,status,error_code AS errorCode FROM fx_rate_history ORDER BY id DESC LIMIT 50').all()).results});
+      if(url.pathname==='/api/admin/pricing'&&request.method==='GET')return json({pricing:await env.DB.prepare('SELECT usd_inr AS usdInr,updated_at AS updatedAt,updated_by AS updatedBy FROM merchant_pricing_settings WHERE id=1').first(),history:(await env.DB.prepare('SELECT previous_usd_inr AS previousUsdInr,usd_inr AS usdInr,reason,changed_by AS changedBy,changed_at AS changedAt FROM merchant_pricing_audit ORDER BY id DESC LIMIT 50').all()).results});
       const verifyMatch=url.pathname.match(/^\/api\/admin\/orders\/([^/]+)\/verify-payment$/);
       if(verifyMatch&&request.method==='POST'){
       if(!request.headers.get('Content-Type')?.toLowerCase().startsWith('application/json'))return json({error:'json_required'},415);
@@ -199,17 +198,32 @@ export default {
         ]);if(decision.at(-1)?.meta?.changes!==1)return json({error:'payment_decision_conflict'},409);}catch(error){if(String(error?.message||'').includes('UNIQUE'))return json({error:'bank_reference_already_used'},409);throw error;}
         return json({verified:true,status:'payment_verified'});
       }
-      if(url.pathname==='/api/admin/fx'&&request.method==='PUT')return json({error:'fx_rates_are_provider_managed'},405);
+      if(url.pathname==='/api/admin/pricing'&&request.method==='PUT'){
+        if(!request.headers.get('Content-Type')?.toLowerCase().startsWith('application/json'))return json({error:'json_required'},415);
+        let input;try{input=await readJsonLimited(request,4096);}catch(error){return json({error:error instanceof RangeError?'payload_too_large':'invalid_json'},error instanceof RangeError?413:400);}
+        if(!input||typeof input!=='object'||Array.isArray(input))return json({error:'invalid_pricing_setting'},400);
+        const usdInr=String(input.usdInr??'');const reason=typeof input.reason==='string'?input.reason.trim():'';
+        if(!/^\d{1,4}(\.\d{1,4})?$/.test(usdInr)||Number(usdInr)<0.01||Number(usdInr)>10000)return json({error:'invalid_pricing_setting'},400);
+        if(reason.length<5||reason.length>300)return json({error:'change_reason_required'},400);
+        const current=await env.DB.prepare('SELECT usd_inr FROM merchant_pricing_settings WHERE id=1').first();if(!current)return json({error:'pricing_unavailable'},503);
+        if(current.usd_inr===usdInr)return json({updated:false,usdInr});
+        const now=new Date().toISOString();
+        await env.DB.batch([
+          env.DB.prepare('INSERT INTO merchant_pricing_audit(previous_usd_inr,usd_inr,reason,changed_by,changed_at) SELECT usd_inr,?,?,\'admin\',? FROM merchant_pricing_settings WHERE id=1 AND usd_inr<>?').bind(usdInr,reason,now,usdInr),
+          env.DB.prepare('UPDATE merchant_pricing_settings SET usd_inr=?,updated_at=?,updated_by=\'admin\' WHERE id=1 AND usd_inr<>?').bind(usdInr,now,usdInr),
+        ]);
+        return json({updated:true,usdInr,updatedAt:now});
+      }
     }
     if (url.pathname.startsWith('/api/')) return json({error:'not_found'},404);
     const productMatch=url.pathname.match(/^\/product\/([^/]+)\/?$/);
     if(productMatch&&request.method==='GET'){
       let supplierId;try{supplierId=decodeURIComponent(productMatch[1]);}catch{return json({error:'not_found'},404);}
-      const row=await env.DB.prepare('SELECT p.supplier_id,p.name,p.description,p.cost_usdt,p.type,p.stock,p.is_unlimited,f.usdt_inr,f.usdt_usd,f.updated_at AS fx_updated_at FROM products p LEFT JOIN fx_rates f ON f.id=1 WHERE p.supplier_id=? AND p.active=1').bind(supplierId).first();
+      const row=await env.DB.prepare('SELECT p.supplier_id,p.name,p.description,p.cost_usdt,p.type,p.stock,p.is_unlimited,s.usd_inr FROM products p JOIN merchant_pricing_settings s ON s.id=1 WHERE p.supplier_id=? AND p.active=1').bind(supplierId).first();
       if(!row)return secure(new Response('<!doctype html><title>Not found | SoftBazzar</title><main><h1>Product not found</h1><a href="/">Return to catalogue</a></main>',{status:404,headers:{'Content-Type':'text/html; charset=utf-8'}}),env);
       const asset=await env.ASSETS.fetch(new Request(new URL('/',url),request));const html=await asset.text();
       const esc=(v)=>String(v??'').replace(/[&<>"']/g,(c)=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-      const price=row.usdt_inr&&row.usdt_usd?priceProduct(row.cost_usdt,{usdtInr:row.usdt_inr,usdtUsd:row.usdt_usd,updatedAt:row.fx_updated_at}):null;
+      const price=priceProduct(row.cost_usdt,row.usd_inr);
       const title=esc(`${row.name} | SoftBazzar`);const desc=esc(row.description||`View current ${row.name} supplier listing.`);const canonical=`${url.origin}/product/${encodeURIComponent(row.supplier_id)}`;
       const structured=price?JSON.stringify({'@context':'https://schema.org','@type':'Product',name:row.name,description:row.description,category:row.type,url:canonical,offers:{'@type':'Offer',priceCurrency:'INR',price:(price.priceInrPaise/100).toFixed(2),availability:row.is_unlimited||row.stock>0?'https://schema.org/InStock':'https://schema.org/OutOfStock'}}).replace(/</g,'\\u003c'):'';
       const page=html.replace(/<title>[\s\S]*?<\/title>/,`<title>${title}</title>`).replace(/<meta name="description"[^>]*>/,`<meta name="description" content="${desc}" />`).replace(/<link rel="canonical"[^>]*>/,`<link rel="canonical" href="${canonical}" data-canonical />`).replace('</head>',`${structured?`<script type="application/ld+json">${structured}</script>`:''}</head>`);

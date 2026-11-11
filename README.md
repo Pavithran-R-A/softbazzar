@@ -9,9 +9,10 @@ The code uses Vite and plain JavaScript. Runtime products come from the Worker A
 - searchable product catalogue and category filters
 - validated supplier stock and availability
 - cart state persisted in the browser
-- D1 catalogue, synchronization history, FX, and order schema
+- D1 catalogue, sync history, fixed pricing, and orders
 - two-minute supplier synchronization Worker
-- INR and approximate USD pricing at fixed 25% markup
+- Fixed 1 USD to ₹105 merchant conversion
+- 25% markup on authenticated supplier `your_cost`
 - privacy and terms pages
 - responsive storefront UI
 - explicitly labelled development fixture inventory
@@ -41,12 +42,10 @@ Before staging, create D1 and set `database_id`.
 Apply local migrations with `wrangler d1 migrations apply softbazzar --local`.
 Set secrets with `wrangler secret put AITOOLSHOP_API_KEY` and
 `wrangler secret put ADMIN_TOKEN`. Never commit secret values.
-FX refresh uses CoinGecko's commercial API plan.
-Set `FX_API_KEY` only after licensing approval.
-Cron checks rates every two minutes.
-Successful rates refresh at five-minute intervals.
-It rejects stale, malformed, and implausible rates.
-Admin FX history is available through `/api/admin/fx`.
+Pricing assumes 1 USDT is approximately 1 USD.
+The backend applies exactly 25% markup.
+Admin rate changes require a reason.
+Authorized rate changes receive immutable audit records.
 
 For isolated staging, create `softbazzar-staging` D1.
 Set its identifier under `env.staging.d1_databases`.
@@ -54,9 +53,6 @@ Apply staging migrations before deploying the Worker.
 Add secrets with `wrangler secret put AITOOLSHOP_API_KEY --env staging`.
 Keep the supplier secret unset until owner configuration.
 Add `ADMIN_TOKEN` only through Wrangler secrets.
-Use a licensed CoinGecko commercial plan first.
-Then add `FX_API_KEY` as a Wrangler secret.
-Never use CoinGecko's free Demo key commercially.
 Keep YouPI credentials unset during this review.
 Deploy staging with `wrangler deploy --env staging`.
 Staging keeps payments and purchases disabled.
