@@ -4,7 +4,7 @@ import test from 'node:test';
 import { priceProduct } from '../src/pricing.js';
 import { parseProducts } from '../src/supplier.js';
 import { setCatalogue } from '../src/data.js';
-import { calculateCartTotalPaise, normalizeStoredCart, writeStoredCart } from '../src/cart-model.js';
+import { calculateCartTotalPaise, normalizeStoredCart, resolveSelection, writeStoredCart } from '../src/cart-model.js';
 
 test('fixed 105 conversion applies exact 25 percent markup', () => {
   const value = priceProduct('10');
@@ -35,6 +35,16 @@ test('cart stores supplier IDs and respects current stock', () => {
   const values = new Map(); const storage = { setItem(key, value) { values.set(key, value); } };
   assert.equal(writeStoredCart(normalized, storage), true);
   assert.equal(values.get('sb_cart_v2'), '[{"id":"fixture-1","variantName":null,"qty":2}]');
+});
+
+test('variant products require an explicit available selection', () => {
+  setCatalogue([{ id: 'variant-product', name: 'Variant product', cat: 'Test', inStock: true, stock: 4, priceInrPaise: 5000, priceNum: 50, variants: [
+    { id: 'small', name: 'Small', inStock: true, stock: 2, priceInrPaise: 1000, priceNum: 10 },
+    { id: 'sold', name: 'Sold out', inStock: false, stock: 0, priceInrPaise: 500, priceNum: 5, disabled: true },
+  ] }]);
+  assert.equal(resolveSelection('variant-product'), null);
+  assert.equal(resolveSelection('variant-product', 'Sold out'), null);
+  assert.equal(resolveSelection('variant-product', 'Small').variantId, 'small');
 });
 
 test('sensitive credentials stay worker side and features default disabled', () => {

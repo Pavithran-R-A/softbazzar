@@ -1,0 +1,36 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { deriveProductFamilies, featuredProductFamilies, findProductFamily } from '../src/product-families.js';
+
+const item = (id, name, priceInrPaise, inStock = true) => ({ id, name, priceInrPaise, inStock });
+
+test('groups supplier offers by unambiguous product names', () => {
+  const families = deriveProductFamilies([
+    item('a', 'ChatGPT Business 1 Month', 10000),
+    item('b', 'Chat GPT Plus 1 Month', 9000),
+    item('c', 'Grok + Cursor Premium', 8000),
+  ]);
+  const chatgpt = findProductFamily(families, 'chatgpt');
+  assert.deepEqual(chatgpt.products.map(({ id }) => id), ['b', 'a']);
+  assert.equal(chatgpt.startingPricePaise, 9000);
+  assert.equal(families.find(({ products }) => products[0].id === 'c').standalone, true);
+});
+
+test('featured families use editorial rank, not popularity', () => {
+  const families = deriveProductFamilies([
+    item('a', 'Claude Pro', 11000), item('b', 'Canva Pro', 12000),
+    item('c', 'Gemini Pro', 13000), item('d', 'Spotify Premium', 14000),
+  ]);
+  const featured = featuredProductFamilies(families);
+  assert.deepEqual(featured.map(({ slug }) => slug), ['gemini', 'claude', 'canva', 'spotify']);
+  assert.ok(featured.every(({ popular }) => popular === undefined));
+});
+
+test('out of stock offers do not define starting price', () => {
+  const [family] = deriveProductFamilies([
+    item('a', 'Netflix Premium 1 Month', 1000, false),
+    item('b', 'Netflix Profile 1 Month', 3000, true),
+  ]);
+  assert.equal(family.availableOffers, 1);
+  assert.equal(family.startingPricePaise, 3000);
+});

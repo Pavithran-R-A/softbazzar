@@ -17,8 +17,9 @@ export function resolveSelection(id, variantName = null) {
 
   let variant = null;
   if (availableVariants.length > 0) {
-    if (variantName) variant = availableVariants.find((entry) => entry.name === variantName) ?? null;
-    if (!variant) variant = availableVariants[0];
+    if (!variantName) return null;
+    variant = availableVariants.find((entry) => entry.name === variantName) ?? null;
+    if (!variant) return null;
   }
 
   const suppliedPaise=variant?.priceInrPaise??product.priceInrPaise;
