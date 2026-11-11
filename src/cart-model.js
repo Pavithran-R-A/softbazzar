@@ -26,6 +26,7 @@ export function resolveSelection(id, variantName = null) {
 
   return {
     id: product.id,
+    variantId: variant?.id ?? null,
     variantName: variant?.name ?? null,
     displayName: variant?.name ?? product.name,
     productName: product.name,
@@ -34,7 +35,7 @@ export function resolveSelection(id, variantName = null) {
     icon: product.icon,
     cat: product.cat,
     color: product.color,
-    maxQuantity: product.unlimited ? 99 : Math.max(1, Number(product.stock) || 1),
+    maxQuantity: variant ? (variant.unlimited ? 99 : Math.max(1, Number(variant.stock) || 1)) : (product.unlimited ? 99 : Math.max(1, Number(product.stock) || 1)),
   };
 }
 
@@ -54,7 +55,7 @@ export function normalizeStoredCart(value) {
     const selection = resolveSelection(row.id, requestedVariant);
     if (!selection) continue;
 
-    const item = { id: selection.id, variantName: selection.variantName, qty: cleanQuantity(row.qty, selection.maxQuantity) };
+    const item = { id: selection.id, variantName: selection.variantName, ...(selection.variantId ? { variantId: selection.variantId } : {}), qty: cleanQuantity(row.qty, selection.maxQuantity) };
     const key = `${item.id}\u0000${item.variantName ?? ''}`;
     const existing = normalized.get(key);
     normalized.set(key, existing ? { ...existing, qty: Math.min(99, existing.qty + item.qty) } : item);

@@ -7,7 +7,9 @@ function sameProduct(previous, next) {
     && Boolean(previous.is_unlimited) === next.unlimited
     && previous.duration === next.duration
     && Boolean(previous.requires_email) === next.requiresEmail
-    && previous.type === next.type;
+    && previous.type === next.type
+    && (previous.image_url??null) === (next.imageUrl??null)
+    && JSON.stringify(JSON.parse(previous.variants_json||'[]')) === JSON.stringify(next.variants||[]);
 }
 
 export function reconcileCatalogue(existingRows, products) {

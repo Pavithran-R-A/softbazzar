@@ -17,7 +17,7 @@ class SqliteD1 {
   constructor() {
     this.sqlite = new DatabaseSync(':memory:');
     this.sqlite.exec('PRAGMA foreign_keys = ON;');
-    for (const migration of ['0001_init.sql', '0002_orders_payments.sql', '0003_financial_guards.sql']) {
+    for (const migration of ['0001_init.sql', '0002_orders_payments.sql', '0003_financial_guards.sql', '0004_catalogue_variants.sql', '0005_fx_provenance.sql']) {
       this.sqlite.exec(readFileSync(new URL(`../migrations/${migration}`, import.meta.url), 'utf8'));
     }
   }
@@ -95,7 +95,56 @@ test('missing supplier credentials skip without fake syncs', async () => {
   const result = await synchronize(env, async () => { requested = true; return supplierResponse(rows); });
   assert.deepEqual(result, { skipped: true, reason: 'supplier_not_configured' });
   assert.equal(requested, false);
-  assert.equal(env.DB.prepare('SELECT COUNT(*) AS count FROM sync_runs').first().count, 0);
+  const skipped=env.DB.prepare('SELECT status,error_code FROM sync_runs').first();
+  assert.deepEqual({...skipped},{status:'skipped',error_code:'supplier_not_configured'});
+  env.DB.sqlite.close();
+});
+
+test('catalogue preserves safe imagery and variants without exposing costs', async () => {
+  const env=await createEnv();
+  const rich=[{...rows[0],image_url:'https://images.example.test/item.webp',variants:[{id:'monthly',name:'Monthly',your_cost:'2',stock_quantity:4},{id:'annual',name:'Annual',your_cost:'10',stock_quantity:0}]}];
+  await synchronize(env,async()=>supplierResponse(rich));
+  const response=await worker.fetch(request('/api/catalogue'),env);
+  const body=await response.json();
+  assert.equal(body.products[0].image,'https://images.example.test/item.webp');
+  assert.deepEqual(body.products[0].variants.map(({id,inStock,priceInrPaise})=>({id,inStock,priceInrPaise})),[
+    {id:'monthly',inStock:true,priceInrPaise:22500},{id:'annual',inStock:false,priceInrPaise:112500},
+  ]);
+  assert.doesNotMatch(JSON.stringify(body),/costUsdt|your_cost|cost_usdt|supplierCost/i);
+  const quoteResponse=await worker.fetch(request('/api/orders',{method:'POST',headers:{Origin:'https://softbazzar-staging.example','Content-Type':'application/json','Idempotency-Key':'variant_quote_key_123456'},body:JSON.stringify({customerEmail:'buyer@example.com',items:[{productId:'sku-email',variantId:'monthly',quantity:1}]})}),env);
+  assert.equal(quoteResponse.status,201);
+  const quote=await quoteResponse.json();
+  assert.equal(quote.totalPaise,22500);
+  const variantLine=await env.DB.prepare('SELECT supplier_variant_id,name_snapshot,supplier_cost_usdt FROM order_lines WHERE order_id=?').bind(quote.orderId).first();
+  assert.equal(variantLine.supplier_variant_id,'monthly');
+  assert.equal(variantLine.name_snapshot,'Email product — Monthly');
+  assert.equal(variantLine.supplier_cost_usdt,'2');
+  const status=await worker.fetch(request(`/api/orders/${quote.orderId}`),env);
+  assert.equal((await status.json()).order.status,'quoted');
+  env.DB.sqlite.close();
+});
+
+test('admin monitoring is protected and exposes operational views', async()=>{
+  const env=await createEnv();
+  delete env.AITOOLSHOP_API_KEY;
+  await synchronize(env);
+  const unauthorized=await worker.fetch(request('/api/admin/overview'),env);
+  assert.equal(unauthorized.status,401);
+  const headers={Authorization:`Bearer ${env.ADMIN_TOKEN}`};
+  const overview=await worker.fetch(request('/api/admin/overview',{headers}),env);
+  assert.equal(overview.status,200);
+  const data=await overview.json();
+  assert.equal(data.supplierConfigured,false);
+  assert.equal(data.syncRuns[0].status,'skipped');
+  const runs=await worker.fetch(request('/api/admin/sync-runs',{headers}),env);
+  assert.equal((await runs.json()).syncRuns.length,1);
+  const fx=await worker.fetch(request('/api/admin/fx',{headers}),env);
+  assert.equal((await fx.json()).fx.usdtInr,'90');
+  const invalidFx=await worker.fetch(request('/api/admin/fx',{method:'PUT',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify({usdtInr:'90',usdtUsd:'1',sourceUrl:'http://rates.example',updatedAt:new Date().toISOString()})}),env);
+  assert.equal(invalidFx.status,400);
+  const validFx=await worker.fetch(request('/api/admin/fx',{method:'PUT',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify({usdtInr:'91.25',usdtUsd:'1',sourceUrl:'https://rates.example',updatedAt:new Date().toISOString()})}),env);
+  assert.equal(validFx.status,200);
+  assert.equal((await (await worker.fetch(request('/api/admin/fx',{headers}),env)).json()).fx.sourceUrl,'https://rates.example/');
   env.DB.sqlite.close();
 });
 
@@ -169,6 +218,9 @@ test('staging responses block indexing and sitemap discovery', async () => {
   const robots = await worker.fetch(request('/robots.txt'), env);
   assert.equal(robots.headers.get('X-Robots-Tag'), 'noindex, nofollow');
   assert.match(await robots.text(), /Disallow: \/\n/);
+  const api=await worker.fetch(request('/api/health'),env);
+  assert.equal(api.headers.get('X-Robots-Tag'),'noindex, nofollow');
+  assert.equal(api.headers.get('X-Frame-Options'),'DENY');
   const sitemap = await worker.fetch(request('/sitemap.xml'), env);
   assert.equal(sitemap.status, 404);
   env.DB.sqlite.close();

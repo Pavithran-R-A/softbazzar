@@ -7,6 +7,8 @@ const migrationNames = [
   '0001_init.sql',
   '0002_orders_payments.sql',
   '0003_financial_guards.sql',
+  '0004_catalogue_variants.sql',
+  '0005_fx_provenance.sql',
 ];
 
 function database() {

@@ -11,7 +11,18 @@ export function parseProducts(payload) {
     const requiresEmail = row.requires_email === true || row.requires_email === 1 || row.requires_email === 'true';
     const costUsdt = String(row.your_cost ?? row.cost ?? row.price_usdt ?? row.price); const cost = Number(costUsdt); const stock = Number(row.stock_quantity ?? row.stock ?? row.quantity);
     if (!/^\d{1,10}(\.\d{1,6})?$/.test(costUsdt) || !Number.isFinite(cost) || cost <= 0 || cost>1000000000 || (!unlimited && (!Number.isSafeInteger(stock) || stock < 0 || stock>10000000))) throw new TypeError(`Supplier product ${id} has invalid pricing or stock`);
-    return { id, name: row.name.trim().slice(0,180), description: typeof row.description === 'string' ? row.description.slice(0, 5000) : '', costUsdt, stock: unlimited ? null : Math.floor(stock), unlimited, duration: typeof row.duration === 'string' ? row.duration.slice(0, 120) : null, requiresEmail, type: String(row.type ?? row.category ?? 'Digital product').slice(0, 120) };
+    const variants = Array.isArray(row.variants) ? row.variants.map((variant) => {
+      if (!variant || (typeof variant.id !== 'string' && typeof variant.id !== 'number') || !String(variant.id).trim() || typeof variant.name !== 'string' || !variant.name.trim()) throw new TypeError(`Supplier product ${id} has invalid variants`);
+      const variantCost = String(variant.your_cost ?? variant.cost ?? variant.price_usdt ?? variant.price);
+      const variantUnlimited = variant.is_unlimited === true || variant.is_unlimited === 1 || variant.is_unlimited === 'true';
+      const variantStock = Number(variant.stock_quantity ?? variant.stock ?? variant.quantity);
+      if (!/^\d{1,10}(\.\d{1,6})?$/.test(variantCost) || !Number.isFinite(Number(variantCost)) || Number(variantCost) <= 0 || (!variantUnlimited && (!Number.isSafeInteger(variantStock) || variantStock < 0))) throw new TypeError(`Supplier product ${id} has invalid variant pricing or stock`);
+      return { id: String(variant.id).slice(0,128), name: variant.name.trim().slice(0,180), costUsdt: variantCost, stock: variantUnlimited ? null : variantStock, unlimited: variantUnlimited };
+    }) : [];
+    if (variants.length > 50 || new Set(variants.map((variant) => variant.id)).size !== variants.length) throw new TypeError(`Supplier product ${id} has duplicate or excessive variants`);
+    const imageUrl = typeof row.image_url === 'string' ? row.image_url : typeof row.image === 'string' ? row.image : null;
+    if (imageUrl) { let parsed; try { parsed = new URL(imageUrl); } catch { throw new TypeError(`Supplier product ${id} has invalid image URL`); } if (parsed.protocol !== 'https:') throw new TypeError(`Supplier product ${id} has unsafe image URL`); }
+    return { id, name: row.name.trim().slice(0,180), description: typeof row.description === 'string' ? row.description.slice(0, 5000) : '', costUsdt, stock: unlimited ? null : Math.floor(stock), unlimited, duration: typeof row.duration === 'string' ? row.duration.slice(0, 120) : null, requiresEmail, type: String(row.type ?? row.category ?? 'Digital product').slice(0, 120), imageUrl, variants };
   });
 }
 

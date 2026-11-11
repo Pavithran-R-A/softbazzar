@@ -20,6 +20,8 @@ test('supplier parser prefers reseller cost and rejects duplicate IDs', () => {
   assert.equal(rows[0].stock, 3);
   assert.throws(() => parseProducts([{ id: 1, name: 'A', your_cost: 1, stock: 1 }, { id: 1, name: 'B', your_cost: 2, stock: 2 }]), /duplicate/);
   assert.throws(() => parseProducts([{ id: 1, name: 'A', your_cost: -3, stock: 1 }]), /invalid/);
+  assert.throws(() => parseProducts([{id:2,name:'Unsafe image',your_cost:'1',stock:1,image_url:'http://example.test/item.jpg'}]),/unsafe image/);
+  assert.throws(() => parseProducts([{id:3,name:'Bad variant',your_cost:'1',stock:1,variants:[{id:'v',name:'V',your_cost:'-1',stock:2}]}]),/variant/);
 });
 
 test('cart stores supplier IDs and respects current stock', () => {

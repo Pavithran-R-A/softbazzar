@@ -21,5 +21,6 @@ test('catalogue sync uses two minute schedule and preserves last known good data
 
 test('unsafe fake social proof and manual checkout are absent', () => {
   assert.doesNotMatch(source, /just purchased/);
-  assert.match(source, /Secure checkout unavailable/);
+  assert.match(source, /Create order quote/);
+  assert.match(source, /No payment is collected/);
 });
