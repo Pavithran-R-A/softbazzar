@@ -4,7 +4,7 @@ import { brandIcons, products, categories, setCatalogue } from './data.js';
 import { calculateCartTotalPaise, normalizeStoredCart, readStoredCart, resolveCartItems, resolveSelection, writeStoredCart } from './cart-model.js';
 import { privacyPage, termsPage, TELEGRAM } from './pages.js';
 import { sanitizeHTML } from './text-security.js';
-import { deriveProductFamilies, featuredProductFamilies, findProductFamily } from './product-families.js';
+import { deriveProductFamilies, editorialProductOrder, featuredProductFamilies, findProductFamily } from './product-families.js';
 
 const formatInr = (value) => Number(value).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const chevronSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clip-rule="evenodd"/></svg>`;
@@ -162,17 +162,19 @@ function familyPage(slug) {
   return `${navbar()}<main id="main-content"><section class="section-inner family-page"><a class="detail-back" href="/products" data-route>${backSvg} All supplier offers</a><h1>${sanitizeHTML(family.name)}</h1><p>Supplier listings, prices, and stock.</p><div class="family-offers">${offers}</div></section></main>${footer()}${cartDrawer()}`;
 }
 function productsPage() {
-  return `${navbar()}<main id="main-content"><section class="section products-page"><div class="section-inner"><a class="detail-back" href="/" data-route>${backSvg} Featured families</a><h1 class="section-title">All supplier offers</h1><p id="catalogueStatus" role="status" aria-live="polite">Loading supplier inventory…</p><div class="search-container"><input type="search" id="searchInput" class="search-input" aria-label="Search supplier offers" placeholder="Search supplier offers" autocomplete="off"/></div><div class="catalogue-controls" aria-label="Catalogue filters"><label>Availability <select id="availabilityFilter"><option value="all">All offers</option><option value="available">In stock</option></select></label><label>Sort <select id="sortFilter"><option value="name">Name</option><option value="price-low">Price: low to high</option><option value="price-high">Price: high to low</option></select></label></div><div class="category-chips" id="categoryChips">${chipHTML()}</div><div class="products-grid" id="productsGrid">${productCards('All')}</div></div></section></main>${footer()}${cartDrawer()}`;
+  return `${navbar()}<main id="main-content"><section class="section products-page"><div class="section-inner"><a class="detail-back" href="/" data-route>${backSvg} Featured families</a><h1 class="section-title">All supplier offers</h1><p id="catalogueStatus" role="status" aria-live="polite">Loading supplier inventory…</p><p class="catalogue-ranking-note">Featured order is curated, not popularity data.</p><div class="search-container"><input type="search" id="searchInput" class="search-input" aria-label="Search supplier offers" placeholder="Search supplier offers" autocomplete="off"/></div><div class="catalogue-controls" aria-label="Catalogue filters"><label>Availability <select id="availabilityFilter"><option value="all">All offers</option><option value="available">In stock</option></select></label><label>Sort <select id="sortFilter"><option value="featured">Featured (curated)</option><option value="name">Name A–Z</option><option value="price-low">Price: low to high</option><option value="price-high">Price: high to low</option></select></label></div><div class="category-chips" id="categoryChips">${chipHTML()}</div><div class="products-grid" id="productsGrid">${productCards('All')}</div></div></section></main>${footer()}${cartDrawer()}`;
 }
-function productCards(filter, searchQuery = '', availability = 'all', sort = 'name', limit = Infinity) {
+function productCards(filter, searchQuery = '', availability = 'all', sort = 'featured', limit = Infinity) {
   let list = filter === 'All' ? products : products.filter(p => p.cat.toLocaleLowerCase() === filter.toLocaleLowerCase());
   if(availability==='available')list=list.filter((product)=>product.inStock);
   if (searchQuery) {
     const q = searchQuery.toLowerCase();
     list = list.filter(p => p.name.toLowerCase().includes(q) || (p.desc && p.desc.toLowerCase().includes(q)) || p.cat.toLowerCase().includes(q));
   }
-  if(sort==='price-low')list=[...list].sort((a,b)=>a.priceNum-b.priceNum);
-  if(sort==='price-high')list=[...list].sort((a,b)=>b.priceNum-a.priceNum);
+  if(sort==='featured')list=editorialProductOrder(list);
+  if(sort==='name')list=[...list].sort((a,b)=>a.name.localeCompare(b.name,'en-US')||String(a.id).localeCompare(String(b.id),'en-US'));
+  if(sort==='price-low')list=[...list].sort((a,b)=>a.priceNum-b.priceNum||a.name.localeCompare(b.name,'en-US')||String(a.id).localeCompare(String(b.id),'en-US'));
+  if(sort==='price-high')list=[...list].sort((a,b)=>b.priceNum-a.priceNum||a.name.localeCompare(b.name,'en-US')||String(a.id).localeCompare(String(b.id),'en-US'));
   list=list.slice(0,limit);
   
   if (list.length === 0) {
@@ -421,7 +423,7 @@ function initInteractions() {
     const filter = activeChip ? activeChip.dataset.cat : 'All';
     const query = searchInput ? searchInput.value : '';
     const availability=availabilityFilter?.value||'all';
-    const sort=sortFilter?.value||'name';
+    const sort=sortFilter?.value||'featured';
     gridEl.style.opacity='0'; gridEl.style.transform='translateY(16px)';
     setTimeout(() => {
       gridEl.innerHTML = productCards(filter, query, availability, sort);

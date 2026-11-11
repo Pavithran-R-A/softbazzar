@@ -69,6 +69,29 @@ export function featuredProductFamilies(families, limit = 18) {
   return families.filter((family) => family.featuredRank >= 0).slice(0, Math.min(24, Math.max(12, limit)));
 }
 
+function normalizedOfferName(product) {
+  return String(product.name || '').normalize('NFKC').trim().toLocaleLowerCase('en-US');
+}
+
+function editorialRank(product) {
+  const matches = FAMILY_RULES.filter(({ pattern }) => pattern.test(String(product.name || '')));
+  return matches.length === 1 ? MERCHANDISING_ORDER.indexOf(matches[0].slug) : -1;
+}
+
+export function editorialProductOrder(products) {
+  return [...products].sort((left, right) => {
+    const leftRank = editorialRank(left);
+    const rightRank = editorialRank(right);
+    if (leftRank >= 0 || rightRank >= 0) {
+      if (leftRank < 0) return 1;
+      if (rightRank < 0) return -1;
+      if (leftRank !== rightRank) return leftRank - rightRank;
+    }
+    const nameDelta = normalizedOfferName(left).localeCompare(normalizedOfferName(right), 'en-US');
+    return nameDelta || String(left.id).localeCompare(String(right.id), 'en-US');
+  });
+}
+
 export function findProductFamily(families, slug) {
   return families.find((family) => family.slug === slug) ?? null;
 }

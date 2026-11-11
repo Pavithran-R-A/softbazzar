@@ -48,6 +48,20 @@ test('out of stock offer cannot be added', async ({ page }) => {
   await expect(page.getByRole('button', { name: /Unavailable/ })).toBeDisabled();
 });
 
+test('full catalogue defaults to editorial family priority', async ({ page }) => {
+  await page.goto('/products');
+  await expect(page.getByLabel('Sort')).toHaveValue('featured');
+  const names = await page.locator('.product-name').allTextContents();
+  expect(names.slice(0, 3)).toEqual([
+    'ChatGPT Business Monthly',
+    'ChatGPT Premium Annual',
+    'Canva Pro Plan',
+  ]);
+  await page.getByLabel('Sort').selectOption('name');
+  const alphabetical = await page.locator('.product-name').allTextContents();
+  expect(alphabetical[0]).toBe('Canva Pro Plan');
+});
+
 test('mobile checkout remains usable and quote-only', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/');

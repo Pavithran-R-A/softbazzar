@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { deriveProductFamilies, featuredProductFamilies, findProductFamily } from '../src/product-families.js';
+import { deriveProductFamilies, editorialProductOrder, featuredProductFamilies, findProductFamily } from '../src/product-families.js';
 
 const item = (id, name, priceInrPaise, inStock = true) => ({ id, name, priceInrPaise, inStock });
 
@@ -24,6 +24,20 @@ test('featured families use editorial rank, not popularity', () => {
   const featured = featuredProductFamilies(families);
   assert.deepEqual(featured.map(({ slug }) => slug), ['gemini', 'claude', 'canva', 'spotify']);
   assert.ok(featured.every(({ popular }) => popular === undefined));
+});
+
+test('full catalogue follows editorial rank then stable fallback', () => {
+  const offers = [
+    item('z-unmatched', 'Zulu Utility', 9000),
+    item('claude-high', 'Claude Pro', 8000),
+    item('a-unmatched', 'Alpha Utility', 3000),
+    item('chatgpt', 'Chat GPT Plus', 6000),
+    item('claude-low', 'Claude Starter', 2000),
+  ];
+  assert.deepEqual(
+    editorialProductOrder(offers).map(({ id }) => id),
+    ['chatgpt', 'claude-high', 'claude-low', 'a-unmatched', 'z-unmatched'],
+  );
 });
 
 test('out of stock offers do not define starting price', () => {
