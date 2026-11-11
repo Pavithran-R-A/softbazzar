@@ -66,6 +66,37 @@ test('mobile checkout remains usable and quote-only', async ({ page }) => {
   await expect(page.locator('#quoteMessage')).toContainText('Payment remains disabled');
 });
 
+test('malformed encoded routes render safely', async ({ page }) => {
+  await page.goto('/');
+  await page.evaluate(() => {
+    history.pushState({}, '', '/collection/%E0%A4%A');
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  });
+  await expect(page.getByRole('heading', { name: 'Product family not found' })).toBeVisible();
+  await page.evaluate(() => {
+    history.pushState({}, '', '/product/%E0%A4%A');
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  });
+  await expect(page.getByRole('heading', { name: 'Product not found' })).toBeVisible();
+});
+
+test('inactive quote replay preserves cart contents', async ({ page }) => {
+  await page.route('**/api/orders', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ orderId: 'd9a8b11e-2110-41f7-a701-1d66da65d370', status: 'cancelled', totalPaise: 21000, expiresAt: new Date(Date.now() - 1000).toISOString() }),
+  }));
+  await page.goto('/');
+  await page.getByRole('link', { name: /Canva/ }).first().click();
+  await page.getByRole('link', { name: 'View offer' }).click();
+  await page.getByRole('button', { name: /Add to Cart/ }).click();
+  await page.getByRole('button', { name: 'Cart, 1 item' }).click();
+  await page.getByRole('link', { name: /Proceed to Checkout/ }).click();
+  await page.getByRole('button', { name: 'Create order quote' }).click();
+  await expect(page.locator('#quoteMessage')).toContainText('This quote is no longer active');
+  await expect(page.locator('.cart-badge')).toHaveText('1');
+});
+
 test('layout remains inside target responsive widths', async ({ page }) => {
   for (const width of [320, 375, 390, 480, 768, 1024, 1280, 1440, 1920]) {
     await page.setViewportSize({ width, height: 900 });

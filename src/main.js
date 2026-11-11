@@ -356,18 +356,23 @@ function navigate(path, replace = false) {
   render();
 }
 
+function decodeRouteSegment(value) {
+  try { return decodeURIComponent(value); }
+  catch { return null; }
+}
+
 function render() {
   const pathname = window.location.pathname.replace(/\/+$/, '') || '/';
   const app = document.querySelector('#app');
   if (pathname.startsWith('/product/')) {
-    const id = decodeURIComponent(pathname.slice('/product/'.length));
+    const id = decodeRouteSegment(pathname.slice('/product/'.length));
     app.innerHTML = detailPage(id);
   } else if (pathname === '/checkout') {
     app.innerHTML = `${navbar()}<main id="main-content">${checkoutPage()}</main>${footer()}${cartDrawer()}`;
   } else if (pathname === '/products') {
     app.innerHTML = productsPage();
   } else if (pathname.startsWith('/collection/')) {
-    app.innerHTML = familyPage(decodeURIComponent(pathname.slice('/collection/'.length)));
+    app.innerHTML = familyPage(decodeRouteSegment(pathname.slice('/collection/'.length)));
   } else if (pathname === '/privacy') {
     app.innerHTML = `${navbar()}<main id="main-content"><div class="section-inner" style="padding-top:100px;"><button class="detail-back ripple-btn" data-home style="margin-bottom:20px;">${backSvg} Back to Store</button>${privacyPage()}</div></main>${footer()}${cartDrawer()}`;
   } else if (pathname === '/terms') {
@@ -471,7 +476,7 @@ function initInteractions() {
 async function createOrderQuote(event){
   event.preventDefault();const message=document.getElementById('quoteMessage');
   const items=resolveCartItems(cart).map(item=>({productId:item.id,...(item.variantId?{variantId:item.variantId}:{}),quantity:item.qty}));
-  try{const idempotencyKey=crypto.randomUUID().replaceAll('-','_');const response=await fetch('/api/orders',{method:'POST',headers:{'Content-Type':'application/json','Idempotency-Key':idempotencyKey},body:JSON.stringify({customerEmail:document.getElementById('checkoutEmail').value.trim(),items})});const result=await response.json();if(!response.ok)throw new Error(result.error==='customer_email_required'?'An email is required for this product.':result.error==='quote_rate_limited'?'Too many quote attempts. Try again shortly.':'A current quote could not be created.');sessionStorage.setItem(`sb_order_access_${result.orderId}`,idempotencyKey);const usdText=Number.isSafeInteger(result.approxUsdTotalCents)&&result.approxUsdTotalCents>0?` · ≈ $${(result.approxUsdTotalCents/100).toFixed(2)} USD (approx.)`:'';message.innerHTML=`Quote created for ₹${formatInr(result.totalPaise/100)} INR${usdText}. <a href="/orders/${encodeURIComponent(result.orderId)}" data-route>View order status</a>. Payment remains disabled.`;cart=[];saveCart();updateCartBadge();}catch(error){message.textContent=error.message;}
+  try{const idempotencyKey=crypto.randomUUID().replaceAll('-','_');const response=await fetch('/api/orders',{method:'POST',headers:{'Content-Type':'application/json','Idempotency-Key':idempotencyKey},body:JSON.stringify({customerEmail:document.getElementById('checkoutEmail').value.trim(),items})});const result=await response.json();if(!response.ok)throw new Error(result.error==='customer_email_required'?'An email is required for this product.':result.error==='quote_rate_limited'?'Too many quote attempts. Try again shortly.':result.error==='quote_expired'?'This quote expired. Review your cart again.':result.error==='quote_not_active'?'This quote is no longer active. Your cart remains saved.':'A current quote could not be created.');if(result.status!=='quoted'||!Number.isFinite(Date.parse(result.expiresAt))||Date.parse(result.expiresAt)<=Date.now())throw new Error('This quote is no longer active. Your cart remains saved.');sessionStorage.setItem(`sb_order_access_${result.orderId}`,idempotencyKey);const usdText=Number.isSafeInteger(result.approxUsdTotalCents)&&result.approxUsdTotalCents>0?` · ≈ $${(result.approxUsdTotalCents/100).toFixed(2)} USD (approx.)`:'';message.innerHTML=`Quote created for ₹${formatInr(result.totalPaise/100)} INR${usdText}. <a href="/orders/${encodeURIComponent(result.orderId)}" data-route>View order status</a>. Payment remains disabled.`;cart=[];saveCart();updateCartBadge();}catch(error){message.textContent=error.message;}
 }
 
 async function loadOrderStatus(orderId){
