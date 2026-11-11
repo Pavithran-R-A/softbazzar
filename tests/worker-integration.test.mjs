@@ -17,7 +17,7 @@ class SqliteD1 {
   constructor() {
     this.sqlite = new DatabaseSync(':memory:');
     this.sqlite.exec('PRAGMA foreign_keys = ON;');
-    for (const migration of ['0001_init.sql', '0002_orders_payments.sql', '0003_financial_guards.sql', '0004_catalogue_variants.sql', '0005_fx_provenance.sql']) {
+    for (const migration of ['0001_init.sql', '0002_orders_payments.sql', '0003_financial_guards.sql', '0004_catalogue_variants.sql', '0005_fx_provenance.sql', '0006_fx_rate_history.sql']) {
       this.sqlite.exec(readFileSync(new URL(`../migrations/${migration}`, import.meta.url), 'utf8'));
     }
   }
@@ -119,8 +119,21 @@ test('catalogue preserves safe imagery and variants without exposing costs', asy
   assert.equal(variantLine.supplier_variant_id,'monthly');
   assert.equal(variantLine.name_snapshot,'Email product — Monthly');
   assert.equal(variantLine.supplier_cost_usdt,'2');
+  const quoteWith = (key, item) => worker.fetch(request('/api/orders',{method:'POST',headers:{Origin:'https://softbazzar-staging.example','Content-Type':'application/json','Idempotency-Key':key},body:JSON.stringify({customerEmail:'buyer@example.com',items:[item]})}),env);
+  const missing=await quoteWith('variant_missing_key_123456',{productId:'sku-email',quantity:1});
+  assert.equal(missing.status,400);
+  assert.equal((await missing.json()).error,'variant_required');
+  const unknown=await quoteWith('variant_unknown_key_123456',{productId:'sku-email',variantId:'bogus',quantity:1});
+  assert.equal(unknown.status,409);
+  assert.equal((await unknown.json()).error,'variant_unavailable');
+  const unavailable=await quoteWith('variant_stock_key_123456',{productId:'sku-email',variantId:'annual',quantity:1});
+  assert.equal(unavailable.status,409);
+  assert.equal((await unavailable.json()).error,'insufficient_stock');
   const status=await worker.fetch(request(`/api/orders/${quote.orderId}`),env);
-  assert.equal((await status.json()).order.status,'quoted');
+  const publicStatus=await status.json();
+  assert.equal(publicStatus.order.status,'quoted');
+  assert.equal(Object.hasOwn(publicStatus.order,'customerEmail'),false);
+  assert.equal(Object.hasOwn(publicStatus.order,'email'),false);
   env.DB.sqlite.close();
 });
 
@@ -141,10 +154,9 @@ test('admin monitoring is protected and exposes operational views', async()=>{
   const fx=await worker.fetch(request('/api/admin/fx',{headers}),env);
   assert.equal((await fx.json()).fx.usdtInr,'90');
   const invalidFx=await worker.fetch(request('/api/admin/fx',{method:'PUT',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify({usdtInr:'90',usdtUsd:'1',sourceUrl:'http://rates.example',updatedAt:new Date().toISOString()})}),env);
-  assert.equal(invalidFx.status,400);
-  const validFx=await worker.fetch(request('/api/admin/fx',{method:'PUT',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify({usdtInr:'91.25',usdtUsd:'1',sourceUrl:'https://rates.example',updatedAt:new Date().toISOString()})}),env);
-  assert.equal(validFx.status,200);
-  assert.equal((await (await worker.fetch(request('/api/admin/fx',{headers}),env)).json()).fx.sourceUrl,'https://rates.example/');
+  assert.equal(invalidFx.status,405);
+  const fxHistory=await (await worker.fetch(request('/api/admin/fx',{headers}),env)).json();
+  assert.equal(fxHistory.history.length,0);
   env.DB.sqlite.close();
 });
 
@@ -177,6 +189,11 @@ test('catalogue, required email, stock, quote locking, and expiry', async () => 
   assert.equal(quote.totalPaise, 112500);
   const repeated = await create();
   assert.equal((await repeated.json()).orderId, quote.orderId);
+  const parallelHeaders={...headers,'Idempotency-Key':'parallel_quote_key_12345'};
+  const concurrent=await Promise.all([1,2,3].map(()=>worker.fetch(request('/api/orders',{method:'POST',headers:parallelHeaders,body:JSON.stringify({customerEmail:'person@example.com',items:[{productId:'sku-unlimited',quantity:1}]})}),env)));
+  const parallel=await Promise.all(concurrent.map((response)=>response.json()));
+  assert.equal(new Set(parallel.map((order)=>order.orderId)).size,1);
+  assert.equal(env.DB.prepare("SELECT COUNT(*) AS count FROM orders WHERE idempotency_key='parallel_quote_key_12345'").first().count,1);
   const conflict = await worker.fetch(request('/api/orders', { method: 'POST', headers, body: JSON.stringify({ customerEmail: 'person@example.com', items: [{ productId: 'sku-email', quantity: 2 }] }) }), env);
   assert.equal(conflict.status, 409);
   assert.equal((await conflict.json()).error, 'idempotency_conflict');

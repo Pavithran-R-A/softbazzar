@@ -2,6 +2,7 @@ import { priceProduct } from './pricing.js';
 import { verifyYoupiWebhook } from './payment.js';
 import { parseProducts, supplierRequest } from './supplier.js';
 import { reconcileCatalogue } from './catalogue-sync.js';
+import { refreshFx, FX_MAX_AGE_MS } from './fx.js';
 
 const json = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options':'DENY', 'X-Robots-Tag':'noindex, nofollow', 'Referrer-Policy':'strict-origin-when-cross-origin', 'Permissions-Policy':'camera=(), microphone=(), geolocation=()', 'Strict-Transport-Security':'max-age=31536000; includeSubDomains' } });
 function secure(response, env) {
@@ -70,18 +71,19 @@ async function publicCatalogue(env) {
     env.DB.prepare("SELECT finished_at FROM sync_runs WHERE status='success' ORDER BY id DESC LIMIT 1").first(),
   ]);
   const staleMs = Number(env.STALE_CATALOGUE_MINUTES||10)*60000; const syncAt = Date.parse(latest?.finished_at||''); const stale = !Number.isFinite(syncAt)||Date.now()-syncAt>staleMs;
-  const fxAt = Date.parse(fx?.updated_at||''); const fxStale = !Number.isFinite(fxAt)||Date.now()-fxAt>86400000;
+  const fxAt = Date.parse(fx?.updated_at||''); const fxStale = !Number.isFinite(fxAt)||Date.now()-fxAt>FX_MAX_AGE_MS;
   const products = fx ? rows.results.map((row) => {
     const priced=priceProduct(row.cost_usdt,{usdtInr:fx.usdt_inr,usdtUsd:fx.usdt_usd,updatedAt:fx.updated_at});
     const variants = JSON.parse(row.variants_json||'[]').map((variant)=>{const variantPrice=priceProduct(variant.costUsdt,{usdtInr:fx.usdt_inr,usdtUsd:fx.usdt_usd,updatedAt:fx.updated_at});return{id:variant.id,name:variant.name,inStock:Boolean(variant.unlimited)||variant.stock>0,stock:variant.unlimited?null:variant.stock,unlimited:variant.unlimited,priceInrPaise:variantPrice.priceInrPaise,priceUsd:variantPrice.priceUsd};});
     const hasVariantInventory=variants.length>0;
     return {id:row.supplier_id,name:row.name,desc:row.description,cat:row.category||row.type,type:row.type,duration:row.duration,requiresEmail:Boolean(row.requires_email),inStock:hasVariantInventory?variants.some((variant)=>variant.inStock):Boolean(row.is_unlimited)||row.stock>0,stock:row.is_unlimited?null:row.stock,unlimited:Boolean(row.is_unlimited),sellingUsdt:priced.sellUsdt,priceNum:priced.priceInrPaise/100,priceInrPaise:priced.priceInrPaise,priceUsd:priced.priceUsd,image:row.image_url,variants,quoteFxUpdatedAt:priced.fxUpdatedAt};
   }) : [];
-  return {products,count:products.length,lastSyncAt:latest?.finished_at||null,fxUpdatedAt:fx?.updated_at||null,stale:stale||fxStale,purchasable:!stale&&!fxStale&&Boolean(fx)};
+  const fxProvider=fx?.source_url==='https://api.coingecko.com/api/v3/simple/price'?'coingecko':null;
+  return {products,count:products.length,lastSyncAt:latest?.finished_at||null,fxUpdatedAt:fx?.updated_at||null,fxProvider,stale:stale||fxStale,purchasable:!stale&&!fxStale&&Boolean(fx)};
 }
 
 export default {
-  async scheduled(_event,env,ctx){ctx.waitUntil(synchronize(env));},
+  async scheduled(_event,env,ctx){ctx.waitUntil(Promise.all([refreshFx(env),synchronize(env)]));},
   async fetch(request,env){
     const url=new URL(request.url);
     if(url.pathname==='/api/health'&&request.method==='GET')return json({ok:true,supplierConfigured:Boolean(env.AITOOLSHOP_API_KEY),youpiConfigured:Boolean(env.YOUPI_GATEWAY_URL&&env.YOUPI_MERCHANT_ID&&env.YOUPI_MERCHANT_API_KEY),livePaymentsEnabled:false,supplierPurchasesEnabled:false});
@@ -114,7 +116,7 @@ export default {
       const rows=await env.DB.prepare(`SELECT p.supplier_id,p.name,p.cost_usdt,p.stock,p.is_unlimited,p.requires_email,p.variants_json,f.usdt_inr,f.usdt_usd,f.updated_at AS fx_updated_at FROM products p JOIN fx_rates f ON f.id=1 WHERE p.active=1 AND p.supplier_id IN (${sqlIds})`).bind(...ids).all();
       if(rows.results.length!==ids.length)return json({error:'product_unavailable'},409);
       const rowMap=new Map(rows.results.map((row)=>[row.supplier_id,row]));
-      for(const item of requested.values()){const row=rowMap.get(item.productId);if(item.variantId){const variant=JSON.parse(row.variants_json||'[]').find((entry)=>entry.id===item.variantId);if(!variant)return json({error:'variant_unavailable'},409);if(!variant.unlimited&&variant.stock<item.quantity)return json({error:'insufficient_stock'},409);}else if(!row.is_unlimited&&row.stock<item.quantity)return json({error:'insufficient_stock'},409);}
+      for(const item of requested.values()){const row=rowMap.get(item.productId);const variants=JSON.parse(row.variants_json||'[]');if(variants.length&&!item.variantId)return json({error:'variant_required'},400);if(item.variantId){const variant=variants.find((entry)=>entry.id===item.variantId);if(!variant)return json({error:'variant_unavailable'},409);if(!variant.unlimited&&variant.stock<item.quantity)return json({error:'insufficient_stock'},409);if(!/^\d{1,5}(\.\d{1,6})?$/.test(String(variant.costUsdt))||Number(variant.costUsdt)<=0)return json({error:'variant_price_unavailable'},409);}else if(!row.is_unlimited&&row.stock<item.quantity)return json({error:'insufficient_stock'},409);}
       if(rows.results.some((row)=>row.requires_email)&&!email)return json({error:'customer_email_required'},400);
       const orderId=crypto.randomUUID();const now=new Date().toISOString();const expiresAt=new Date(Date.now()+5*60000).toISOString();let totalPaise=0;
       const lines=[...requested.values()].map((item)=>{const row=rowMap.get(item.productId);const variant=item.variantId?JSON.parse(row.variants_json||'[]').find((entry)=>entry.id===item.variantId):null;const cost=variant?.costUsdt||row.cost_usdt;const price=priceProduct(cost,{usdtInr:row.usdt_inr,usdtUsd:row.usdt_usd,updatedAt:row.fx_updated_at});const lineTotal=price.priceInrPaise*item.quantity;if(!Number.isSafeInteger(lineTotal))throw new RangeError('quote_total_invalid');totalPaise+=lineTotal;return{row,variant,quantity:item.quantity,price,cost,lineId:crypto.randomUUID()};});
@@ -171,7 +173,7 @@ export default {
         const runs=await env.DB.prepare('SELECT id,started_at,finished_at,status,imported,updated,error_code FROM sync_runs ORDER BY id DESC LIMIT 100').all();
         return json({syncRuns:runs.results});
       }
-      if(url.pathname==='/api/admin/fx'&&request.method==='GET')return json({fx:await env.DB.prepare('SELECT usdt_inr AS usdtInr,usdt_usd AS usdtUsd,updated_at AS updatedAt,updated_by AS updatedBy,source_url AS sourceUrl FROM fx_rates WHERE id=1').first()});
+      if(url.pathname==='/api/admin/fx'&&request.method==='GET')return json({fx:await env.DB.prepare('SELECT usdt_inr AS usdtInr,usdt_usd AS usdtUsd,updated_at AS updatedAt,updated_by AS updatedBy,source_url AS sourceUrl FROM fx_rates WHERE id=1').first(),history:(await env.DB.prepare('SELECT usdt_inr AS usdtInr,usdt_usd AS usdtUsd,source_url AS sourceUrl,observed_at AS observedAt,status,error_code AS errorCode FROM fx_rate_history ORDER BY id DESC LIMIT 50').all()).results});
       const verifyMatch=url.pathname.match(/^\/api\/admin\/orders\/([^/]+)\/verify-payment$/);
       if(verifyMatch&&request.method==='POST'){
       if(!request.headers.get('Content-Type')?.toLowerCase().startsWith('application/json'))return json({error:'json_required'},415);
@@ -197,16 +199,7 @@ export default {
         ]);if(decision.at(-1)?.meta?.changes!==1)return json({error:'payment_decision_conflict'},409);}catch(error){if(String(error?.message||'').includes('UNIQUE'))return json({error:'bank_reference_already_used'},409);throw error;}
         return json({verified:true,status:'payment_verified'});
       }
-      if(url.pathname==='/api/admin/fx'&&request.method==='PUT'){
-        if(!request.headers.get('Content-Type')?.toLowerCase().startsWith('application/json'))return json({error:'json_required'},415);
-        let input;try{input=await readJsonLimited(request,4096);}catch(error){return json({error:error instanceof RangeError?'payload_too_large':'invalid_json'},error instanceof RangeError?413:400);}
-        if(!input||typeof input!=='object'||Array.isArray(input))return json({error:'invalid_fx_rate'},400);
-        const inr=Number(input.usdtInr),usd=Number(input.usdtUsd),updatedAt=Date.parse(input.updatedAt||'');let source;
-        try{source=new URL(input.sourceUrl);}catch{return json({error:'invalid_fx_source'},400);}
-        if(source.protocol!=='https:'||source.username||source.password||source.href.length>500||!/^\d{1,5}(\.\d{1,6})?$/.test(String(input.usdtInr))||!/^\d{1,3}(\.\d{1,6})?$/.test(String(input.usdtUsd))||!Number.isFinite(inr)||inr<0.01||inr>10000||!Number.isFinite(usd)||usd<0.01||usd>100||!Number.isFinite(updatedAt)||updatedAt>Date.now()||Date.now()-updatedAt>86400000)return json({error:'invalid_fx_rate'},400);
-        await env.DB.prepare('INSERT INTO fx_rates(id,usdt_inr,usdt_usd,updated_at,updated_by,source_url) VALUES(1,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET usdt_inr=excluded.usdt_inr,usdt_usd=excluded.usdt_usd,updated_at=excluded.updated_at,updated_by=excluded.updated_by,source_url=excluded.source_url').bind(String(inr),String(usd),new Date(updatedAt).toISOString(),'admin',source.href).run();
-        return json({updatedAt:new Date(updatedAt).toISOString(),sourceUrl:source.href});
-      }
+      if(url.pathname==='/api/admin/fx'&&request.method==='PUT')return json({error:'fx_rates_are_provider_managed'},405);
     }
     if (url.pathname.startsWith('/api/')) return json({error:'not_found'},404);
     const productMatch=url.pathname.match(/^\/product\/([^/]+)\/?$/);

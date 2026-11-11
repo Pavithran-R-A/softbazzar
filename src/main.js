@@ -21,6 +21,7 @@ const savedCartSnapshot = (() => { try { return JSON.parse(localStorage.getItem(
 let cart = readStoredCart();
 let adminToken = '';
 let cataloguePurchasable=false;
+let fxDataProvider=null;
 
 function saveCart() {
   cart = normalizeStoredCart(cart);
@@ -206,6 +207,7 @@ function footer() {
     </ul></div>
   </div>
   <div class="footer-bottom"><p>&copy; 2026 SoftBazzar. All rights reserved.</p>
+    ${fxDataProvider==='coingecko'?'<a href="https://www.coingecko.com/en/api" target="_blank" rel="noopener noreferrer">Data provided by CoinGecko</a>':''}
     <div class="footer-payment"><span>Checkout currently paused</span></div>
     <div class="footer-socials">
       <a href="${TELEGRAM}" target="_blank" aria-label="Telegram">${telegramSvg}</a>
@@ -572,6 +574,7 @@ render();
 fetch('/api/catalogue').then((response) => response.ok ? response.json() : Promise.reject(new Error('catalogue unavailable'))).then((catalogue) => {
   if (!Array.isArray(catalogue.products)) throw new Error('invalid catalogue');
   cataloguePurchasable=Boolean(catalogue.purchasable);
+  fxDataProvider=catalogue.fxProvider;
   setCatalogue(catalogue.products.map((product) => ({ ...product, variants:product.variants.map((variant)=>({...variant,priceNum:variant.priceInrPaise/100,price:`₹${(variant.priceInrPaise/100).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}`,disabled:!variant.inStock})), priceNum: product.priceInrPaise / 100, icon: Object.keys(brandIcons).find((key) => key === product.name.toLowerCase().split(/[^a-z0-9]+/)[0]), color: '#7967ef', price: `₹${(product.priceInrPaise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, inStock: product.inStock && catalogue.purchasable, features: [product.duration, product.requiresEmail ? 'Email required for delivery' : null, product.type].filter(Boolean) })));
   const retainedCart = normalizeStoredCart(savedCartSnapshot);
   cart = retainedCart;
