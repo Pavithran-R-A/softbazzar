@@ -58,8 +58,7 @@ test('full catalogue defaults to editorial family priority', async ({ page }) =>
     'Canva Pro Plan',
   ]);
   await page.getByLabel('Sort').selectOption('name');
-  const alphabetical = await page.locator('.product-name').allTextContents();
-  expect(alphabetical[0]).toBe('Canva Pro Plan');
+  await expect(page.locator('.product-name').first()).toHaveText('Canva Pro Plan');
 });
 
 test('mobile checkout remains usable and quote-only', async ({ page }) => {

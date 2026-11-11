@@ -33,10 +33,12 @@ test('full catalogue follows editorial rank then stable fallback', () => {
     item('a-unmatched', 'Alpha Utility', 3000),
     item('chatgpt', 'Chat GPT Plus', 6000),
     item('claude-low', 'Claude Starter', 2000),
+    item('z-same-title', 'Same Utility', 7000),
+    item('a-same-title', 'Same Utility', 7000),
   ];
   assert.deepEqual(
     editorialProductOrder(offers).map(({ id }) => id),
-    ['chatgpt', 'claude-high', 'claude-low', 'a-unmatched', 'z-unmatched'],
+    ['chatgpt', 'claude-high', 'claude-low', 'a-unmatched', 'a-same-title', 'z-same-title', 'z-unmatched'],
   );
 });
 
