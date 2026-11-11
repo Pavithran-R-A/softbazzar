@@ -73,6 +73,12 @@ function getCartTotal() {
   return calculateCartTotalPaise(cart)/100;
 }
 
+function getCartTotalUsdCents() {
+  const items=resolveCartItems(cart);
+  if(items.some((item)=>item.lineTotalUsdCents===null))return null;
+  return items.reduce((sum,item)=>sum+item.lineTotalUsdCents,0);
+}
+
 function updateCartBadge() {
   const count = cart.reduce((total, item) => total + item.qty, 0);
   document.querySelectorAll('.cart-badge').forEach(b => {
@@ -119,18 +125,18 @@ function renderCartItems() {
     const variantKey = item.variantName || '';
     return `<div class="cart-item" style="animation-delay:${i*0.05}s"><div class="cart-item-icon">${brandIcons[item.icon]||''}</div><div class="cart-item-info"><div class="cart-item-name">${sanitizeHTML(item.displayName)}</div><div class="cart-item-cat">${sanitizeHTML(item.cat)}</div></div>
     <div class="cart-qty-ctrl"><button aria-label="Decrease ${sanitizeHTML(item.displayName)} quantity" class="cart-qty-btn ripple-btn" data-qty-sub="${sanitizeHTML(item.id)}" data-qty-name="${sanitizeHTML(variantKey)}">-</button><span class="cart-qty-val">${item.qty||1}</span><button aria-label="Increase ${sanitizeHTML(item.displayName)} quantity" class="cart-qty-btn ripple-btn" data-qty-add="${sanitizeHTML(item.id)}" data-qty-name="${sanitizeHTML(variantKey)}">+</button></div>
-    <div class="cart-item-price">₹${formatInr(item.lineTotalPaise/100)}</div><button aria-label="Remove ${sanitizeHTML(item.displayName)}" class="cart-remove ripple-btn" data-remove-id="${sanitizeHTML(item.id)}" data-remove-name="${sanitizeHTML(variantKey)}">${trashSvg}</button></div>`;
+    <div class="cart-item-price"><span>₹${formatInr(item.lineTotalPaise/100)}</span>${item.lineTotalUsdCents===null?'':`<small>≈ $${(item.lineTotalUsdCents/100).toFixed(2)} USD</small>`}</div><button aria-label="Remove ${sanitizeHTML(item.displayName)}" class="cart-remove ripple-btn" data-remove-id="${sanitizeHTML(item.id)}" data-remove-name="${sanitizeHTML(variantKey)}">${trashSvg}</button></div>`;
   }).join('');
   const totalEl = document.querySelector('.cart-total-amount');
   const countEl = document.querySelector('.cart-header .cart-count');
-  if (totalEl) totalEl.textContent = `₹${formatInr(getCartTotal())}`;
+  if (totalEl) totalEl.innerHTML = `₹${formatInr(getCartTotal())}${getCartTotalUsdCents()===null?'':`<small>≈ $${(getCartTotalUsdCents()/100).toFixed(2)} USD (approx.)</small>`}`;
   if (countEl) countEl.textContent = `(${resolvedItems.reduce((sum, item) => sum + (item.qty || 1), 0)})`;
 }
 
 function getIcon(k) { return brandIcons[k] || ''; }
 function marqueeItems() { return products.slice(0, 6).map((product) => `<div class="marquee-item"><div class="marquee-icon liquid-glass">${getIcon(product.icon)}</div><span class="marquee-name">${sanitizeHTML(product.name)}</span></div>`).join(''); }
 function productCards(filter, searchQuery = '', availability = 'all', sort = 'name', limit = Infinity) {
-  let list = filter === 'All' ? products : products.filter(p => p.cat === filter);
+  let list = filter === 'All' ? products : products.filter(p => p.cat.toLocaleLowerCase() === filter.toLocaleLowerCase());
   if(availability==='available')list=list.filter((product)=>product.inStock);
   if (searchQuery) {
     const q = searchQuery.toLowerCase();
@@ -152,7 +158,7 @@ function productCards(filter, searchQuery = '', availability = 'all', sort = 'na
     const hasVariants = activeVariants && activeVariants.length > 0;
     return `<div class="product-card fade-up fade-up-delay-${i%4+1}" data-id="${sanitizeHTML(p.id)}">
     <div class="product-img">${p.image?`<img class="product-photo" src="${sanitizeHTML(p.image)}" alt="${sanitizeHTML(p.name)}" loading="lazy" referrerpolicy="no-referrer"/>`:''}<div class="brand-svg">${getIcon(p.icon)}</div></div>
-    <div class="product-body"><div class="product-name">${sanitizeHTML(p.name)}</div><div class="product-cat">${sanitizeHTML(p.cat)}</div>
+    <div class="product-body"><a class="product-name" href="/product/${encodeURIComponent(p.id)}" data-route>${sanitizeHTML(p.name)}</a><div class="product-cat">${sanitizeHTML(p.cat)}</div>
     <div class="product-pricing"><span class="product-price">${sanitizeHTML(defaultPrice)} INR</span>${Number.isFinite(Number(defaultUsd)) ? `<span class="product-usd">≈ $${Number(defaultUsd).toFixed(2)} USD (approx.)</span>` : ''}</div>
     ${Array.isArray(p.variants)&&p.variants.length>0 ? `<div class="product-cat">${activeVariants.length?'Choose an available option':'No options currently available'}</div>` : p.unlimited ? '<div class="product-cat">Unlimited stock</div>' : Number.isInteger(p.stock) ? `<div class="product-cat">${p.stock === 0 ? 'Out of stock' : p.stock <= 3 ? `Only ${p.stock} available` : `${p.stock} available`}</div>` : ''}
     ${p.requiresEmail ? '<div class="product-cat">Email required for delivery</div>' : ''}
@@ -184,7 +190,7 @@ function cartDrawer() {
   <div class="cart-drawer" id="cartDrawer" role="dialog" aria-modal="true" aria-label="Shopping cart" aria-hidden="true" inert>
     <div class="cart-header"><h2>Your Cart <span class="cart-count">(${cart.reduce((total,item)=>total+item.qty,0)})</span></h2><button aria-label="Close cart" class="cart-close ripple-btn" id="cartClose">${closeSvg}</button></div>
     <div class="cart-items"></div>
-    <div class="cart-footer"><div class="cart-total"><span class="cart-total-label">Total</span><span class="cart-total-amount">₹${getCartTotal()}</span></div>
+    <div class="cart-footer"><div class="cart-total"><span class="cart-total-label">Total</span><span class="cart-total-amount">₹${formatInr(getCartTotal())}${getCartTotalUsdCents()===null?'':`<small>≈ $${(getCartTotalUsdCents()/100).toFixed(2)} USD (approx.)</small>`}</span></div>
     <a href="/checkout" data-route class="cart-checkout ripple-btn">${telegramSvg} Proceed to Checkout</a>
     <p class="cart-telegram-note">Secure checkout is currently unavailable.</p></div>
   </div>`;
@@ -316,9 +322,9 @@ function detailPage(id) {
 function checkoutPage() {
   const items = resolveCartItems(cart);
   if (!items.length) return '<div class="checkout-page page-transition"><div class="section-inner" style="max-width:700px;margin:0 auto;padding:100px 32px;text-align:center;"><h2>Your cart is empty</h2><p>Add current supplier products first.</p><button class="btn-cta ripple-btn" data-home><span>Browse Products</span></button></div></div>';
-  const rows = items.map((item) => '<div class="co-item"><div class="co-item-info"><span class="co-item-name">' + sanitizeHTML(item.productName) + '</span><span class="co-item-variant">' + sanitizeHTML(item.displayName) + '</span><span class="co-item-qty">Qty: ' + item.qty + '</span></div><span class="co-item-price">₹' + formatInr(item.lineTotalPaise/100) + '</span></div>').join('');
+  const rows = items.map((item) => '<div class="co-item"><div class="co-item-info"><span class="co-item-name">' + sanitizeHTML(item.productName) + '</span><span class="co-item-variant">' + sanitizeHTML(item.displayName) + '</span><span class="co-item-qty">Qty: ' + item.qty + '</span></div><span class="co-item-price">₹' + formatInr(item.lineTotalPaise/100) + (item.lineTotalUsdCents===null?'':'<small>≈ $' + (item.lineTotalUsdCents/100).toFixed(2) + ' USD</small>') + '</span></div>').join('');
   const action=cataloguePurchasable?'<form id="quoteForm"><label for="checkoutEmail">Email for order updates</label><input id="checkoutEmail" type="email" maxlength="254" autocomplete="email"/><button class="detail-buy-btn ripple-btn co-send-btn" type="submit">Create order quote</button><p>Quote only. No payment is collected.</p></form>':'<div class="co-card"><h3>Checkout paused</h3><p>Supplier inventory needs a fresh verified update.</p></div><button class="detail-buy-btn ripple-btn co-send-btn" disabled>Order quotes unavailable</button>';
-  return '<div class="checkout-page page-transition"><div class="section-inner" style="max-width:900px;margin:0 auto;padding:100px 32px 80px;"><button class="detail-back ripple-btn" data-home>' + backSvg + ' Back to products</button><h1 class="co-title">Checkout</h1><div class="co-grid"><div class="co-left"><div class="co-card"><h3>Order Summary</h3><div class="co-items">' + rows + '</div><div class="co-total-row"><span>Estimated total</span><span class="co-total">₹' + formatInr(getCartTotal()) + '</span></div></div></div><div class="co-right">' + action + '<p id="quoteMessage" role="status"></p></div></div></div></div>';
+  return '<div class="checkout-page page-transition"><div class="section-inner" style="max-width:900px;margin:0 auto;padding:100px 32px 80px;"><button class="detail-back ripple-btn" data-home>' + backSvg + ' Back to products</button><h1 class="co-title">Checkout</h1><div class="co-grid"><div class="co-left"><div class="co-card"><h3>Order Summary</h3><div class="co-items">' + rows + '</div><div class="co-total-row"><span>Estimated total</span><span class="co-total">₹' + formatInr(getCartTotal()) + (getCartTotalUsdCents()===null?'':'<small>≈ $' + (getCartTotalUsdCents()/100).toFixed(2) + ' USD (approx.)</small>') + '</span></div></div></div><div class="co-right">' + action + '<p id="quoteMessage" role="status"></p></div></div></div></div>';
 }
 
 function orderStatusPage(){return `${navbar()}<main id="main-content"><section class="section-inner" style="max-width:760px;margin:140px auto 80px;padding:0 24px"><h1>Order status</h1><p id="orderStatusMessage" role="status">Loading order details…</p><div id="orderStatusDetails"></div><button class="btn-cta" data-home>Return to store</button></section></main>${footer()}`;}
@@ -441,11 +447,11 @@ function initInteractions() {
 async function createOrderQuote(event){
   event.preventDefault();const message=document.getElementById('quoteMessage');
   const items=resolveCartItems(cart).map(item=>({productId:item.id,...(item.variantId?{variantId:item.variantId}:{}),quantity:item.qty}));
-  try{const response=await fetch('/api/orders',{method:'POST',headers:{'Content-Type':'application/json','Idempotency-Key':crypto.randomUUID().replaceAll('-','_')},body:JSON.stringify({customerEmail:document.getElementById('checkoutEmail').value.trim(),items})});const result=await response.json();if(!response.ok)throw new Error(result.error==='customer_email_required'?'An email is required for this product.':'A current quote could not be created.');message.innerHTML=`Quote created. <a href="/orders/${encodeURIComponent(result.orderId)}" data-route>View order status</a>. Payment remains disabled.`;cart=[];saveCart();updateCartBadge();}catch(error){message.textContent=error.message;}
+  try{const response=await fetch('/api/orders',{method:'POST',headers:{'Content-Type':'application/json','Idempotency-Key':crypto.randomUUID().replaceAll('-','_')},body:JSON.stringify({customerEmail:document.getElementById('checkoutEmail').value.trim(),items})});const result=await response.json();if(!response.ok)throw new Error(result.error==='customer_email_required'?'An email is required for this product.':'A current quote could not be created.');const usdText=Number.isSafeInteger(result.approxUsdTotalCents)&&result.approxUsdTotalCents>0?` · ≈ $${(result.approxUsdTotalCents/100).toFixed(2)} USD (approx.)`:'';message.innerHTML=`Quote created for ₹${formatInr(result.totalPaise/100)} INR${usdText}. <a href="/orders/${encodeURIComponent(result.orderId)}" data-route>View order status</a>. Payment remains disabled.`;cart=[];saveCart();updateCartBadge();}catch(error){message.textContent=error.message;}
 }
 
 async function loadOrderStatus(orderId){
-  try{const response=await fetch(`/api/orders/${encodeURIComponent(orderId)}`);if(!response.ok)throw new Error('Order not found.');const {order}=await response.json();document.getElementById('orderStatusMessage').textContent=`Status: ${order.status}. No payment was collected.`;document.getElementById('orderStatusDetails').innerHTML=`<p>Order ${sanitizeHTML(order.id)}</p><p>Total ₹${formatInr(order.totalPaise/100)} INR</p><ul>${order.items.map(item=>`<li>${sanitizeHTML(item.name)} · ${item.quantity} × ₹${formatInr(item.unitPricePaise/100)}</li>`).join('')}</ul>`;}catch(error){document.getElementById('orderStatusMessage').textContent=error.message;}
+  try{const response=await fetch(`/api/orders/${encodeURIComponent(orderId)}`);if(!response.ok)throw new Error('Order not found.');const {order}=await response.json();document.getElementById('orderStatusMessage').textContent=`Status: ${order.status}. No payment was collected.`;const usdText=Number.isSafeInteger(order.approxUsdTotalCents)&&order.approxUsdTotalCents>0?`<p>≈ $${(order.approxUsdTotalCents/100).toFixed(2)} USD (approx., at ₹${sanitizeHTML(order.merchantUsdInr)} per USD)</p>`:'';document.getElementById('orderStatusDetails').innerHTML=`<p>Order ${sanitizeHTML(order.id)}</p><p>Total ₹${formatInr(order.totalPaise/100)} INR</p>${usdText}<ul>${order.items.map(item=>`<li>${sanitizeHTML(item.name)} · ${item.quantity} × ₹${formatInr(item.unitPricePaise/100)}${Number.isSafeInteger(item.approxUsdCents)&&item.approxUsdCents>0?` · ≈ $${(item.approxUsdCents/100).toFixed(2)} USD each`:''}</li>`).join('')}</ul>`;}catch(error){document.getElementById('orderStatusMessage').textContent=error.message;}
 }
 
 async function loadAdminDashboard(){

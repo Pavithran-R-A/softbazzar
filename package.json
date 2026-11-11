@@ -8,6 +8,7 @@
     "cf:dev": "npm run build && wrangler dev",
     "test": "node --experimental-loader ./scripts/asset-loader.mjs --test",
     "build": "npm test && vite build && node --experimental-loader ./scripts/asset-loader.mjs scripts/generate-seo.mjs",
+    "build:pages:staging": "npm run build && node scripts/prepare-pages-staging.mjs",
     "preview": "vite preview"
   },
   "devDependencies": {

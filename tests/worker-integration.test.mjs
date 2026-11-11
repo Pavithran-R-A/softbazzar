@@ -113,6 +113,8 @@ test('catalogue preserves safe imagery and variants without exposing costs', asy
   assert.equal(quoteResponse.status,201);
   const quote=await quoteResponse.json();
   assert.equal(quote.totalPaise,26250);
+  assert.equal(quote.approxUsdTotalCents,250);
+  assert.equal(quote.merchantUsdInr,'105');
   const variantLine=await env.DB.prepare('SELECT id,supplier_variant_id,name_snapshot,supplier_cost_usdt FROM order_lines WHERE order_id=?').bind(quote.orderId).first();
   assert.equal(variantLine.supplier_variant_id,'monthly');
   assert.equal(variantLine.name_snapshot,'Email product — Monthly');
@@ -134,6 +136,9 @@ test('catalogue preserves safe imagery and variants without exposing costs', asy
   const status=await worker.fetch(request(`/api/orders/${quote.orderId}`),env);
   const publicStatus=await status.json();
   assert.equal(publicStatus.order.status,'quoted');
+  assert.equal(publicStatus.order.approxUsdTotalCents,250);
+  assert.equal(publicStatus.order.merchantUsdInr,'105');
+  assert.equal(publicStatus.order.items[0].approxUsdCents,250);
   assert.equal(Object.hasOwn(publicStatus.order,'customerEmail'),false);
   assert.equal(Object.hasOwn(publicStatus.order,'email'),false);
   env.DB.sqlite.close();

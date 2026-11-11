@@ -24,6 +24,8 @@ export function resolveSelection(id, variantName = null) {
   const suppliedPaise=variant?.priceInrPaise??product.priceInrPaise;
   const priceInrPaise=Number.isSafeInteger(Number(suppliedPaise))?Number(suppliedPaise):Math.round(Number(variant?.priceNum??product.priceNum)*100);
   if(!Number.isSafeInteger(priceInrPaise)||priceInrPaise<0)return null;
+  const suppliedUsd=variant?.priceUsd??product.priceUsd;
+  const priceUsdCents=Number.isFinite(Number(suppliedUsd))&&Number(suppliedUsd)>=0?Math.round(Number(suppliedUsd)*100):null;
   const priceNum=priceInrPaise/100;
 
   return {
@@ -35,6 +37,7 @@ export function resolveSelection(id, variantName = null) {
     price: variant?.price ?? product.price,
     priceNum,
     priceInrPaise,
+    priceUsdCents,
     icon: product.icon,
     cat: product.cat,
     color: product.color,
@@ -73,7 +76,7 @@ export function resolveCartItems(items) {
     if (!selection) return [];
     const lineTotalPaise=selection.priceInrPaise*item.qty;
     if(!Number.isSafeInteger(lineTotalPaise))return [];
-    return [{ ...selection, qty: item.qty, lineTotalPaise,lineTotal:lineTotalPaise/100 }];
+    return [{ ...selection, qty: item.qty, lineTotalPaise,lineTotalUsdCents:selection.priceUsdCents===null?null:selection.priceUsdCents*item.qty,lineTotal:lineTotalPaise/100 }];
   });
 }
 

@@ -52,5 +52,12 @@ export let products = [];
 export let categories = ['All'];
 export function setCatalogue(nextProducts) {
   products = nextProducts;
-  categories = ['All', ...new Set(nextProducts.map((product) => product.cat))];
+  const seen = new Set();
+  categories = ['All', ...nextProducts.flatMap((product) => {
+    const label = String(product.cat || '').trim();
+    const key = label.toLocaleLowerCase();
+    if (!label || seen.has(key)) return [];
+    seen.add(key);
+    return [label];
+  })];
 }
