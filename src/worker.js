@@ -28,6 +28,16 @@ function validEmail(value) { return typeof value==='string'&&value.length<=254&&
 async function sha256Hex(value){return [...new Uint8Array(await crypto.subtle.digest('SHA-256',value))].map((byte)=>byte.toString(16).padStart(2,'0')).join('');}
 const safeEqual = (a, b) => { if (!a || !b || a.length !== b.length) return false; let diff = 0; for (let i = 0; i < a.length; i += 1) diff |= a.charCodeAt(i) ^ b.charCodeAt(i); return diff === 0; };
 
+async function replayQuote(env, quote, requestHash) {
+  if (quote.request_hash !== requestHash) return json({ error: 'idempotency_conflict' }, 409);
+  if (quote.status !== 'quoted') return json({ error: 'quote_not_active' }, 410);
+  if (!Number.isFinite(Date.parse(quote.quote_expires_at)) || Date.parse(quote.quote_expires_at) <= Date.now()) {
+    await env.DB.prepare("UPDATE orders SET status='cancelled',updated_at=? WHERE id=? AND status='quoted'").bind(new Date().toISOString(), quote.id).run();
+    return json({ error: 'quote_expired' }, 410);
+  }
+  return json({ orderId: quote.id, status: quote.status, totalPaise: quote.total_paise, approxUsdTotalCents: quote.approx_usd_total_cents || null, merchantUsdInr: quote.merchant_usd_inr || DEFAULT_USD_INR, expiresAt: quote.quote_expires_at });
+}
+
 export async function synchronize(env, fetchImpl = fetch) {
   const started = new Date().toISOString(); let runId;
   if(!env.AITOOLSHOP_API_KEY){
@@ -122,7 +132,7 @@ export default {
       const normalizedItems=[...requested.values()].map((item)=>item.variantId?[item.productId,item.variantId,item.quantity]:[item.productId,item.quantity]).sort((left,right)=>JSON.stringify(left).localeCompare(JSON.stringify(right)));
       const requestHash=await sha256Hex(new TextEncoder().encode(JSON.stringify({email,items:normalizedItems})));
       const existing=await env.DB.prepare("SELECT o.id,o.status,o.total_paise,o.quote_expires_at,o.request_hash,o.merchant_usd_inr,COALESCE((SELECT SUM(ps.approx_usd_cents*ol.quantity) FROM order_lines ol JOIN pricing_snapshots ps ON ps.order_line_id=ol.id WHERE ol.order_id=o.id),0) AS approx_usd_total_cents FROM orders o WHERE o.idempotency_key=?").bind(idempotencyKey).first();
-      if(existing){if(existing.request_hash!==requestHash)return json({error:'idempotency_conflict'},409);if(existing.status==='quoted'&&Date.parse(existing.quote_expires_at)<=Date.now()){await env.DB.prepare("UPDATE orders SET status='cancelled',updated_at=? WHERE id=? AND status='quoted'").bind(new Date().toISOString(),existing.id).run();return json({error:'quote_expired'},410);}return json({orderId:existing.id,status:existing.status,totalPaise:existing.total_paise,approxUsdTotalCents:existing.approx_usd_total_cents||null,merchantUsdInr:existing.merchant_usd_inr||DEFAULT_USD_INR,expiresAt:existing.quote_expires_at});}
+      if(existing)return replayQuote(env,existing,requestHash);
       const catalogue=await publicCatalogue(env);if(!catalogue.purchasable)return json({error:'catalogue_stale'},503);
       const pricing=await env.DB.prepare('SELECT usd_inr,updated_at FROM merchant_pricing_settings WHERE id=1').first();if(!pricing)return json({error:'pricing_unavailable'},503);
       const ids=[...new Set([...requested.values()].map((item)=>item.productId))];const sqlIds=ids.map(()=>'?').join(',');
@@ -136,7 +146,7 @@ export default {
       if(!Number.isSafeInteger(totalPaise)||totalPaise<=0)return json({error:'quote_total_invalid'},400);
       const stmts=[env.DB.prepare('DELETE FROM quote_stock_reservations WHERE expires_at<=?').bind(now),env.DB.prepare("INSERT INTO orders(id,idempotency_key,request_hash,status,customer_email,currency,total_paise,fx_usdt_inr,fx_usdt_usd,quote_expires_at,created_at,updated_at,merchant_usd_inr) VALUES(?,?,?,'quoted',?,'INR',?,?,?,?,?,?,?)").bind(orderId,idempotencyKey,requestHash,email||null,totalPaise,pricing.usd_inr,'1',expiresAt,now,now,pricing.usd_inr)];
       for(const line of lines){stmts.push(env.DB.prepare('INSERT INTO order_lines(id,order_id,supplier_product_id,name_snapshot,quantity,unit_price_paise,supplier_cost_usdt,supplier_idempotency_key,supplier_variant_id) VALUES(?,?,?,?,?,?,?,?,?)').bind(line.lineId,orderId,line.row.supplier_id,line.variant?`${line.row.name} — ${line.variant.name}`:line.row.name,line.quantity,line.price.priceInrPaise,String(line.cost),`softbazzar-${line.lineId}`,line.variant?.id||null));stmts.push(env.DB.prepare('INSERT INTO pricing_snapshots(order_line_id,selling_usdt,fx_usdt_inr,fx_usdt_usd,quote_fx_updated_at,unit_price_paise,approx_usd_cents,created_at,merchant_usd_inr) VALUES(?,?,?,?,?,?,?,?,?)').bind(line.lineId,String(line.price.sellUsdt),pricing.usd_inr,'1',pricing.updated_at,line.price.priceInrPaise,Math.round(line.price.priceUsd*100),now,pricing.usd_inr));stmts.push(env.DB.prepare('INSERT INTO quote_stock_reservations(order_line_id,order_id,supplier_id,variant_id,quantity,expires_at) VALUES(?,?,?,?,?,?)').bind(line.lineId,orderId,line.row.supplier_id,line.variant?.id||'',line.quantity,expiresAt));}
-      try{await env.DB.batch(stmts);}catch(error){if(String(error?.message||'').includes('quote_stock_unavailable'))return json({error:'insufficient_stock'},409);const duplicate=await env.DB.prepare("SELECT o.id,o.status,o.total_paise,o.quote_expires_at,o.merchant_usd_inr,COALESCE((SELECT SUM(ps.approx_usd_cents*ol.quantity) FROM order_lines ol JOIN pricing_snapshots ps ON ps.order_line_id=ol.id WHERE ol.order_id=o.id),0) AS approx_usd_total_cents FROM orders o WHERE o.idempotency_key=?").bind(idempotencyKey).first();if(duplicate)return json({orderId:duplicate.id,status:duplicate.status,totalPaise:duplicate.total_paise,approxUsdTotalCents:duplicate.approx_usd_total_cents||null,merchantUsdInr:duplicate.merchant_usd_inr||DEFAULT_USD_INR,expiresAt:duplicate.quote_expires_at});throw error;}
+      try{await env.DB.batch(stmts);}catch(error){const duplicate=await env.DB.prepare("SELECT o.id,o.status,o.request_hash,o.total_paise,o.quote_expires_at,o.merchant_usd_inr,COALESCE((SELECT SUM(ps.approx_usd_cents*ol.quantity) FROM order_lines ol JOIN pricing_snapshots ps ON ps.order_line_id=ol.id WHERE ol.order_id=o.id),0) AS approx_usd_total_cents FROM orders o WHERE o.idempotency_key=?").bind(idempotencyKey).first();if(duplicate)return replayQuote(env,duplicate,requestHash);if(String(error?.message||'').includes('quote_stock_unavailable'))return json({error:'insufficient_stock'},409);throw error;}
       return json({orderId,status:'quoted',currency:'INR',totalPaise,approxUsdTotalCents,merchantUsdInr:pricing.usd_inr,expiresAt},201);
     }
     if(/^\/api\/orders\/[^/]+\/payments$/.test(url.pathname)&&request.method==='POST')return json({error:'payments_disabled'},503);

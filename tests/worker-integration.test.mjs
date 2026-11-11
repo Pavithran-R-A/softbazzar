@@ -250,6 +250,50 @@ test('catalogue, required email, stock, quote locking, and expiry', async () => 
   const expired = await worker.fetch(request('/api/orders', { method: 'POST', headers: { ...headers, 'Idempotency-Key': expiredKey }, body: JSON.stringify({ customerEmail: 'person@example.com', items: [{ productId: 'sku-email', quantity: 1 }] }) }), env);
   assert.equal(expired.status, 410);
   assert.equal((await env.DB.prepare("SELECT status FROM orders WHERE id='expired-order'").first()).status, 'cancelled');
+  const cancelledKey = 'cancelled_key_123456789';
+  const cancelledHash = createHash('sha256').update(JSON.stringify({ email: '', items: [['sku-unlimited', 1]] })).digest('hex');
+  await env.DB.prepare("INSERT INTO orders(id,idempotency_key,request_hash,status,customer_email,currency,total_paise,fx_usdt_inr,fx_usdt_usd,quote_expires_at,created_at,updated_at,merchant_usd_inr) VALUES('cancelled-order',?,?,'cancelled',NULL,'INR',13125,'105','1',?,?,?,'105')")
+    .bind(cancelledKey, cancelledHash, new Date(Date.now() - 1000).toISOString(), new Date().toISOString(), new Date().toISOString()).run();
+  const cancelledReplay = await worker.fetch(request('/api/orders', { method: 'POST', headers: { ...headers, 'Idempotency-Key': cancelledKey }, body: JSON.stringify({ items: [{ productId: 'sku-unlimited', quantity: 1 }] }) }), env);
+  assert.equal(cancelledReplay.status, 410);
+  assert.equal((await cancelledReplay.json()).error, 'quote_not_active');
+  env.DB.sqlite.close();
+});
+
+test('idempotency race rejects a different request hash', async () => {
+  const env = await createEnv();
+  await synchronize(env, async () => supplierResponse(rows));
+  const key = 'race_different_request_123';
+  const requestBody = { items: [{ productId: 'sku-unlimited', quantity: 1 }] };
+  const requestHash = createHash('sha256').update(JSON.stringify({ email: '', items: [['sku-unlimited', 1]] })).digest('hex');
+  const originalBatch = env.DB.batch.bind(env.DB);
+  env.DB.batch = (statements) => {
+    env.DB.sqlite.prepare("INSERT INTO orders(id,idempotency_key,request_hash,status,customer_email,currency,total_paise,fx_usdt_inr,fx_usdt_usd,quote_expires_at,created_at,updated_at,merchant_usd_inr) VALUES('raced-order',?,'different-hash','quoted',NULL,'INR',13125,'105','1',?,?,?,'105')")
+      .run(key, new Date(Date.now() + 300000).toISOString(), new Date().toISOString(), new Date().toISOString());
+    return originalBatch(statements);
+  };
+  const response = await worker.fetch(request('/api/orders', { method: 'POST', headers: { Origin: 'https://softbazzar-staging.example', 'Content-Type': 'application/json', 'Idempotency-Key': key }, body: JSON.stringify(requestBody) }), env);
+  assert.equal(response.status, 409);
+  assert.equal((await response.json()).error, 'idempotency_conflict');
+  assert.equal(env.DB.prepare('SELECT COUNT(*) AS count FROM orders').first().count, 1);
+  assert.notEqual(requestHash, 'different-hash');
+  env.DB.sqlite.close();
+});
+
+test('same-key retries return the reserved quote during stock races', async () => {
+  const env = await createEnv();
+  await synchronize(env, async () => supplierResponse(rows));
+  const key = 'same_key_stock_race_12345';
+  const create = () => worker.fetch(request('/api/orders', {
+    method: 'POST',
+    headers: { Origin: 'https://softbazzar-staging.example', 'Content-Type': 'application/json', 'Idempotency-Key': key },
+    body: JSON.stringify({ customerEmail: 'person@example.com', items: [{ productId: 'sku-email', quantity: 3 }] }),
+  }), env);
+  const responses = await Promise.all([create(), create(), create()]);
+  const results = await Promise.all(responses.map((response) => response.json()));
+  assert.ok(responses.every((response) => response.ok));
+  assert.equal(new Set(results.map((result) => result.orderId)).size, 1);
+  assert.equal(env.DB.prepare("SELECT SUM(quantity) AS quantity FROM quote_stock_reservations WHERE supplier_id='sku-email'").first().quantity, 3);
   env.DB.sqlite.close();
 });
 
