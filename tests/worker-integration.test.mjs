@@ -150,6 +150,24 @@ test('catalogue preserves safe imagery and variants without exposing costs', asy
   env.DB.sqlite.close();
 });
 
+test('catalogue and metadata withhold unsafe supplier instructions', async () => {
+  const env = await createEnv();
+  const unsafe = {
+    ...rows[0],
+    id: 'unsafe-offer',
+    name: 'Unsafe offer',
+    description: 'Pay in the bot. Send screenshots to @unknownSeller https://bad.example',
+  };
+  await synchronize(env, async () => supplierResponse([unsafe]));
+  const catalogue = await (await worker.fetch(request('/api/catalogue'), env)).json();
+  assert.equal(catalogue.products[0].desc, 'Supplier notes withheld pending merchant review.');
+  const page = await worker.fetch(request('/product/unsafe-offer'), env);
+  const html = await page.text();
+  assert.match(html, /Supplier notes withheld pending merchant review/);
+  assert.doesNotMatch(html, /unknownSeller|bad\.example|Send screenshots|Pay in the bot/);
+  env.DB.sqlite.close();
+});
+
 test('admin monitoring is protected and exposes operational views', async()=>{
   const env=await createEnv();
   delete env.AITOOLSHOP_API_KEY;
@@ -343,15 +361,15 @@ test('out-of-stock supplier products cannot be quoted', async () => {
   env.DB.sqlite.close();
 });
 
-test('supplier descriptions remain escaped in product metadata', async () => {
+test('unsafe supplier descriptions stay out of product metadata', async () => {
   const env = await createEnv();
   const malicious = [{ ...rows[0], description: '<img src=x onerror="alert(1)"><a href="javascript:alert(2)">claim</a>' }];
   await synchronize(env, async () => supplierResponse(malicious));
   const response = await worker.fetch(request('/product/sku-email'), env);
   const html = await response.text();
   assert.equal(response.status, 200);
-  assert.match(html, /&lt;img src=x onerror=&quot;alert\(1\)&quot;&gt;/);
-  assert.doesNotMatch(html, /<img src=x onerror=/i);
+  assert.match(html, /Supplier notes withheld pending merchant review/);
+  assert.doesNotMatch(html, /onerror|javascript:|alert\(1\)/i);
   env.DB.sqlite.close();
 });
 

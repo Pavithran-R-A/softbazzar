@@ -2,6 +2,7 @@ import { priceProduct, DEFAULT_USD_INR } from './pricing.js';
 import { verifyYoupiWebhook } from './payment.js';
 import { parseProducts, supplierRequest } from './supplier.js';
 import { reconcileCatalogue } from './catalogue-sync.js';
+import { sanitizeSupplierDescription } from './supplier-content.js';
 
 const json = (value, status = 200, extraHeaders = {}) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options':'DENY', 'X-Robots-Tag':'noindex, nofollow', 'Referrer-Policy':'strict-origin-when-cross-origin', 'Permissions-Policy':'camera=(), microphone=(), geolocation=()', 'Strict-Transport-Security':'max-age=31536000; includeSubDomains', ...extraHeaders } });
 function secure(response, env) {
@@ -94,7 +95,7 @@ async function publicCatalogue(env) {
     const priced=priceProduct(row.cost_usdt,usdInr);
     const variants = JSON.parse(row.variants_json||'[]').map((variant)=>{const variantPrice=priceProduct(variant.costUsdt,usdInr);return{id:variant.id,name:variant.name,inStock:Boolean(variant.unlimited)||variant.stock>0,stock:variant.unlimited?null:variant.stock,unlimited:variant.unlimited,priceInrPaise:variantPrice.priceInrPaise,priceUsd:variantPrice.priceUsd};});
     const hasVariantInventory=variants.length>0;
-    return {id:row.supplier_id,name:row.name,desc:row.description,cat:row.category||row.type,type:row.type,duration:row.duration,requiresEmail:Boolean(row.requires_email),inStock:hasVariantInventory?variants.some((variant)=>variant.inStock):Boolean(row.is_unlimited)||row.stock>0,stock:row.is_unlimited?null:row.stock,unlimited:Boolean(row.is_unlimited),sellingUsdt:priced.sellUsdt,sellingUsd:priced.sellingUsd,priceNum:priced.priceInrPaise/100,priceInrPaise:priced.priceInrPaise,priceUsd:priced.priceUsd,usdInr,image:row.image_url,variants};
+    return {id:row.supplier_id,name:row.name,desc:sanitizeSupplierDescription(row.description),cat:row.category||row.type,type:row.type,duration:row.duration,requiresEmail:Boolean(row.requires_email),inStock:hasVariantInventory?variants.some((variant)=>variant.inStock):Boolean(row.is_unlimited)||row.stock>0,stock:row.is_unlimited?null:row.stock,unlimited:Boolean(row.is_unlimited),sellingUsdt:priced.sellUsdt,sellingUsd:priced.sellingUsd,priceNum:priced.priceInrPaise/100,priceInrPaise:priced.priceInrPaise,priceUsd:priced.priceUsd,usdInr,image:row.image_url,variants};
   });
   return {products,count:products.length,lastSyncAt:latest?.finished_at||null,pricing:{usdInr,updatedAt:pricing?.updated_at||null},stale,purchasable:!stale};
 }
@@ -255,8 +256,8 @@ export default {
       const asset=await env.ASSETS.fetch(new Request(new URL('/',url),request));const html=await asset.text();
       const esc=(v)=>String(v??'').replace(/[&<>"']/g,(c)=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
       const price=priceProduct(row.cost_usdt,row.usd_inr);
-      const title=esc(`${row.name} | SoftBazzar`);const desc=esc(row.description||`View current ${row.name} supplier listing.`);const canonical=`${url.origin}/product/${encodeURIComponent(row.supplier_id)}`;
-      const structured=price?JSON.stringify({'@context':'https://schema.org','@type':'Product',name:row.name,description:row.description,category:row.type,url:canonical,offers:{'@type':'Offer',priceCurrency:'INR',price:(price.priceInrPaise/100).toFixed(2),availability:row.is_unlimited||row.stock>0?'https://schema.org/InStock':'https://schema.org/OutOfStock'}}).replace(/</g,'\\u003c'):'';
+      const title=esc(`${row.name} | SoftBazzar`);const productDescription=sanitizeSupplierDescription(row.description)||`View current ${row.name} supplier listing.`;const desc=esc(productDescription);const canonical=`${url.origin}/product/${encodeURIComponent(row.supplier_id)}`;
+      const structured=price?JSON.stringify({'@context':'https://schema.org','@type':'Product',name:row.name,description:productDescription,category:row.type,url:canonical,offers:{'@type':'Offer',priceCurrency:'INR',price:(price.priceInrPaise/100).toFixed(2),availability:row.is_unlimited||row.stock>0?'https://schema.org/InStock':'https://schema.org/OutOfStock'}}).replace(/</g,'\\u003c'):'';
       const page=html.replace(/<title>[\s\S]*?<\/title>/,`<title>${title}</title>`).replace(/<meta name="description"[^>]*>/,`<meta name="description" content="${desc}" />`).replace(/<link rel="canonical"[^>]*>/,`<link rel="canonical" href="${canonical}" data-canonical />`).replace('</head>',`${structured?`<script type="application/ld+json">${structured}</script>`:''}</head>`);
       return secure(new Response(page,{headers:{'Content-Type':'text/html; charset=utf-8','Cache-Control':'public, max-age=60'}}),env);
     }
