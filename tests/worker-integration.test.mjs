@@ -17,7 +17,7 @@ class SqliteD1 {
   constructor() {
     this.sqlite = new DatabaseSync(':memory:');
     this.sqlite.exec('PRAGMA foreign_keys = ON;');
-    for (const migration of ['0001_init.sql', '0002_orders_payments.sql', '0003_financial_guards.sql', '0004_catalogue_variants.sql', '0005_fx_provenance.sql', '0006_fx_rate_history.sql']) {
+    for (const migration of ['0001_init.sql', '0002_orders_payments.sql', '0003_financial_guards.sql', '0004_catalogue_variants.sql', '0005_fx_provenance.sql', '0006_fx_rate_history.sql', '0007_quote_stock_reservations.sql']) {
       this.sqlite.exec(readFileSync(new URL(`../migrations/${migration}`, import.meta.url), 'utf8'));
     }
   }
@@ -194,6 +194,10 @@ test('catalogue, required email, stock, quote locking, and expiry', async () => 
   const parallel=await Promise.all(concurrent.map((response)=>response.json()));
   assert.equal(new Set(parallel.map((order)=>order.orderId)).size,1);
   assert.equal(env.DB.prepare("SELECT COUNT(*) AS count FROM orders WHERE idempotency_key='parallel_quote_key_12345'").first().count,1);
+  const competingQuote=(key)=>worker.fetch(request('/api/orders',{method:'POST',headers:{...headers,'Idempotency-Key':key},body:JSON.stringify({customerEmail:'person@example.com',items:[{productId:'sku-email',quantity:2}]})}),env);
+  const competing=await Promise.all([competingQuote('competing_quote_key_A123'),competingQuote('competing_quote_key_B123')]);
+  assert.deepEqual(competing.map((response)=>response.status).sort(),[201,409]);
+  assert.equal(env.DB.prepare("SELECT SUM(quantity) AS count FROM quote_stock_reservations WHERE supplier_id='sku-email' AND expires_at>strftime('%Y-%m-%dT%H:%M:%fZ','now')").first().count,3);
   const conflict = await worker.fetch(request('/api/orders', { method: 'POST', headers, body: JSON.stringify({ customerEmail: 'person@example.com', items: [{ productId: 'sku-email', quantity: 2 }] }) }), env);
   assert.equal(conflict.status, 409);
   assert.equal((await conflict.json()).error, 'idempotency_conflict');
