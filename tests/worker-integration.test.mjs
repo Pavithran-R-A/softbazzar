@@ -227,6 +227,20 @@ test('stale catalogue disables quote creation and live routes', async () => {
   env.DB.sqlite.close();
 });
 
+test('stale FX disables catalogue purchasing and new quotes', async()=>{
+  const env=await createEnv();
+  await synchronize(env,async()=>supplierResponse(rows));
+  await env.DB.prepare('UPDATE fx_rates SET updated_at=? WHERE id=1').bind(new Date(Date.now()-16*60_000).toISOString()).run();
+  const catalogue=await worker.fetch(request('/api/catalogue'),env);
+  const state=await catalogue.json();
+  assert.equal(state.stale,true);
+  assert.equal(state.purchasable,false);
+  const quote=await worker.fetch(request('/api/orders',{method:'POST',headers:{Origin:'https://softbazzar-staging.example','Content-Type':'application/json','Idempotency-Key':'expired_fx_quote_key123'},body:JSON.stringify({customerEmail:'buyer@example.com',items:[{productId:'sku-email',quantity:1}]})}),env);
+  assert.equal(quote.status,503);
+  assert.equal((await quote.json()).error,'catalogue_stale');
+  env.DB.sqlite.close();
+});
+
 test('staging responses block indexing and sitemap discovery', async () => {
   const env = await createEnv();
   env.STAGING_ENV = 'true';
