@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { createHmac, createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
-import worker, { synchronize } from '../src/worker.js';
+import worker, { cleanupExpiredQuotes, synchronize } from '../src/worker.js';
 
 class SqliteStatement {
   constructor(db, sql, values = []) { this.db = db; this.sql = sql; this.values = values; }
@@ -51,11 +51,15 @@ async function createEnv() {
     STALE_CATALOGUE_MINUTES: '10',
     SUPPLIER_PURCHASES_ENABLED: 'false',
     YOUPI_LIVE_ENABLED: 'false',
+    QUOTE_RATE_LIMITER: { limit: async () => ({ success: true }) },
   };
 }
 
 const supplierResponse = (products) => new Response(JSON.stringify({ success: true, count: products.length, products }));
-const request = (path, init = {}) => new Request(`https://softbazzar-staging.example${path}`, init);
+const request = (path, init = {}) => new Request(`https://softbazzar-staging.example${path}`, {
+  ...init,
+  headers: { 'cf-connecting-ip': '198.51.100.20', ...(init.headers || {}) },
+});
 
 test('scheduled catalogue sync imports, replaces, and preserves last-good data', async () => {
   const env = await createEnv();
@@ -133,7 +137,9 @@ test('catalogue preserves safe imagery and variants without exposing costs', asy
   const unavailable=await quoteWith('variant_stock_key_123456',{productId:'sku-email',variantId:'annual',quantity:1});
   assert.equal(unavailable.status,409);
   assert.equal((await unavailable.json()).error,'insufficient_stock');
-  const status=await worker.fetch(request(`/api/orders/${quote.orderId}`),env);
+  const unauthorizedStatus=await worker.fetch(request(`/api/orders/${quote.orderId}`),env);
+  assert.equal(unauthorizedStatus.status,404);
+  const status=await worker.fetch(request(`/api/orders/${quote.orderId}`,{headers:{Authorization:'Bearer variant_quote_key_123456'}}),env);
   const publicStatus=await status.json();
   assert.equal(publicStatus.order.status,'quoted');
   assert.equal(publicStatus.order.approxUsdTotalCents,250);
@@ -150,6 +156,10 @@ test('admin monitoring is protected and exposes operational views', async()=>{
   await synchronize(env);
   const unauthorized=await worker.fetch(request('/api/admin/overview'),env);
   assert.equal(unauthorized.status,401);
+  for (const path of ['/api/admin/orders','/api/admin/sync-runs','/api/admin/pricing','/api/admin/sync','/api/admin/orders/order-test/verify-payment']) {
+    const denied=await worker.fetch(request(path,{method:path.endsWith('/sync')||path.endsWith('/verify-payment')?'POST':'GET'}),env);
+    assert.equal(denied.status,401,path);
+  }
   const headers={Authorization:`Bearer ${env.ADMIN_TOKEN}`};
   const overview=await worker.fetch(request('/api/admin/overview',{headers}),env);
   assert.equal(overview.status,200);
@@ -167,6 +177,10 @@ test('admin monitoring is protected and exposes operational views', async()=>{
   assert.equal(history.history[0].usdInr,'106');
   const tooShort=await worker.fetch(request('/api/admin/pricing',{method:'PUT',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify({usdInr:'107',reason:'ok'})}),env);
   assert.equal(tooShort.status,400);
+  const manualSync=await worker.fetch(request('/api/admin/sync',{method:'POST',headers}),env);
+  assert.equal(manualSync.status,200);
+  assert.equal(env.DB.prepare("SELECT COUNT(*) AS count FROM audit_events WHERE event_type='manual_catalogue_sync'").first().count,1);
+  assert.equal(env.DB.prepare("SELECT COUNT(*) AS count FROM admin_actions WHERE action='manual_catalogue_sync'").first().count,1);
   env.DB.sqlite.close();
 });
 
@@ -210,6 +224,11 @@ test('catalogue, required email, stock, quote locking, and expiry', async () => 
   const quote = await first.json();
   assert.equal(first.status, 201);
   assert.equal(quote.totalPaise, 131250);
+  const anonymousStatus = await worker.fetch(request(`/api/orders/${quote.orderId}`), env);
+  assert.equal(anonymousStatus.status, 404);
+  const authorizedStatus = await worker.fetch(request(`/api/orders/${quote.orderId}`, { headers: { Authorization: `Bearer ${headers['Idempotency-Key']}` } }), env);
+  assert.equal(authorizedStatus.status, 200);
+  assert.equal(Object.hasOwn(await authorizedStatus.json(), 'customerEmail'), false);
   const repeated = await create();
   assert.equal((await repeated.json()).orderId, quote.orderId);
   const parallelHeaders={...headers,'Idempotency-Key':'parallel_quote_key_12345'};
@@ -231,6 +250,78 @@ test('catalogue, required email, stock, quote locking, and expiry', async () => 
   const expired = await worker.fetch(request('/api/orders', { method: 'POST', headers: { ...headers, 'Idempotency-Key': expiredKey }, body: JSON.stringify({ customerEmail: 'person@example.com', items: [{ productId: 'sku-email', quantity: 1 }] }) }), env);
   assert.equal(expired.status, 410);
   assert.equal((await env.DB.prepare("SELECT status FROM orders WHERE id='expired-order'").first()).status, 'cancelled');
+  env.DB.sqlite.close();
+});
+
+test('quote requests enforce Cloudflare rate limits', async () => {
+  const env = await createEnv();
+  await synchronize(env, async () => supplierResponse(rows));
+  env.QUOTE_RATE_LIMITER.limit = async () => ({ success: false });
+  const response = await worker.fetch(request('/api/orders', {
+    method: 'POST',
+    headers: { Origin: 'https://softbazzar-staging.example', 'Content-Type': 'application/json', 'Idempotency-Key': 'rate_limited_quote_12345' },
+    body: JSON.stringify({ customerEmail: 'person@example.com', items: [{ productId: 'sku-email', quantity: 1 }] }),
+  }), env);
+  assert.equal(response.status, 429);
+  assert.equal(response.headers.get('Retry-After'), '60');
+  assert.equal(env.DB.prepare('SELECT COUNT(*) AS count FROM orders').first().count, 0);
+  env.DB.sqlite.close();
+});
+
+test('quote creation fails closed without its rate-limit binding', async () => {
+  const env = await createEnv();
+  await synchronize(env, async () => supplierResponse(rows));
+  delete env.QUOTE_RATE_LIMITER;
+  const response = await worker.fetch(request('/api/orders', {
+    method: 'POST',
+    headers: { Origin: 'https://softbazzar-staging.example', 'Content-Type': 'application/json', 'Idempotency-Key': 'missing_limiter_key_12345' },
+    body: JSON.stringify({ items: [{ productId: 'sku-unlimited', quantity: 1 }] }),
+  }), env);
+  assert.equal(response.status, 503);
+  assert.equal((await response.json()).error, 'quote_protection_unavailable');
+  assert.equal(env.DB.prepare('SELECT COUNT(*) AS count FROM orders').first().count, 0);
+  env.DB.sqlite.close();
+});
+
+test('out-of-stock supplier products cannot be quoted', async () => {
+  const env = await createEnv();
+  await synchronize(env, async () => supplierResponse([{ id: 'sku-empty', name: 'Empty stock', your_cost: '1', stock_quantity: 0 }]));
+  const catalogue = await (await worker.fetch(request('/api/catalogue'), env)).json();
+  assert.equal(catalogue.products[0].inStock, false);
+  const response = await worker.fetch(request('/api/orders', {
+    method: 'POST',
+    headers: { Origin: 'https://softbazzar-staging.example', 'Content-Type': 'application/json', 'Idempotency-Key': 'out_of_stock_quote_12345' },
+    body: JSON.stringify({ items: [{ productId: 'sku-empty', quantity: 1 }] }),
+  }), env);
+  assert.equal(response.status, 409);
+  assert.equal((await response.json()).error, 'insufficient_stock');
+  assert.equal(env.DB.prepare('SELECT COUNT(*) AS count FROM orders').first().count, 0);
+  env.DB.sqlite.close();
+});
+
+test('supplier descriptions remain escaped in product metadata', async () => {
+  const env = await createEnv();
+  const malicious = [{ ...rows[0], description: '<img src=x onerror="alert(1)"><a href="javascript:alert(2)">claim</a>' }];
+  await synchronize(env, async () => supplierResponse(malicious));
+  const response = await worker.fetch(request('/product/sku-email'), env);
+  const html = await response.text();
+  assert.equal(response.status, 200);
+  assert.match(html, /&lt;img src=x onerror=&quot;alert\(1\)&quot;&gt;/);
+  assert.doesNotMatch(html, /<img src=x onerror=/i);
+  env.DB.sqlite.close();
+});
+
+test('scheduled cleanup cancels expired quotes and releases stock', async () => {
+  const env = await createEnv();
+  await synchronize(env, async () => supplierResponse(rows));
+  const now = new Date().toISOString();
+  await env.DB.prepare("INSERT INTO orders(id,idempotency_key,status,currency,total_paise,fx_usdt_inr,fx_usdt_usd,quote_expires_at,created_at,updated_at,merchant_usd_inr) VALUES('expired-cleanup','expired_cleanup_key_12345','quoted','INR',131250,'105','1',?,?,?,'105')")
+    .bind(new Date(Date.now() - 1000).toISOString(), now, now).run();
+  await env.DB.prepare("INSERT INTO order_lines(id,order_id,supplier_product_id,name_snapshot,quantity,unit_price_paise,supplier_cost_usdt,supplier_idempotency_key) VALUES('expired-line','expired-cleanup','sku-email','Email product',1,131250,'10','expired-supplier-key')").run();
+  await env.DB.prepare("INSERT INTO quote_stock_reservations(order_line_id,order_id,supplier_id,quantity,expires_at) VALUES('expired-line','expired-cleanup','sku-email',1,?)").bind(new Date(Date.now() - 1000).toISOString()).run();
+  await cleanupExpiredQuotes(env);
+  assert.equal(env.DB.prepare("SELECT status FROM orders WHERE id='expired-cleanup'").first().status, 'cancelled');
+  assert.equal(env.DB.prepare("SELECT COUNT(*) AS count FROM quote_stock_reservations WHERE order_id='expired-cleanup'").first().count, 0);
   env.DB.sqlite.close();
 });
 
@@ -362,5 +453,61 @@ test('signed payment amount mismatch enters manual review', async () => {
   const response = await worker.fetch(request('/api/webhooks/youpi', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Gateway-Timestamp': timestamp, 'X-Gateway-Delivery-Id': event.deliveryId, 'X-Gateway-Event': event.event, 'X-Gateway-Signature-V2': signature }, body: rawBody }), env);
   assert.equal(response.status, 200);
   assert.equal((await env.DB.prepare('SELECT status FROM orders WHERE id=?').bind(quote.orderId).first()).status, 'manual_review');
+  env.DB.sqlite.close();
+});
+
+test('mock lifecycle covers cancellation, balance failure, delivery failure, and refund', async () => {
+  const env = await createEnv();
+  await synchronize(env, async () => supplierResponse(rows));
+  const makeQuote = async (key) => {
+    const response = await worker.fetch(request('/api/orders', {
+      method: 'POST',
+      headers: { Origin: 'https://softbazzar-staging.example', 'Content-Type': 'application/json', 'Idempotency-Key': key },
+      body: JSON.stringify({ items: [{ productId: 'sku-unlimited', quantity: 1 }] }),
+    }), env);
+    assert.equal(response.status, 201);
+    return response.json();
+  };
+  const cancelled = await makeQuote('cancelled_simulation_key_123');
+  await env.DB.prepare("UPDATE orders SET status='cancelled' WHERE id=?").bind(cancelled.orderId).run();
+  await env.DB.prepare("INSERT INTO payment_attempts(id,order_id,gateway,gateway_payment_id,state,amount_paise,created_at,updated_at) VALUES('cancelled-attempt',?,'youpi','cancelled-payment','pending',?,?,?)")
+    .bind(cancelled.orderId, cancelled.totalPaise, new Date().toISOString(), new Date().toISOString()).run();
+  const timestamp = String(Date.now());
+  const event = { deliveryId: 'cancelled-delivery-123', timestamp, event: 'OBSERVED_SUCCESS', method: 'UPI', orderId: cancelled.orderId, paymentId: 'cancelled-payment', amountPaise: cancelled.totalPaise };
+  const raw = JSON.stringify(event);
+  const signature = `sha256=${createHmac('sha256', env.YOUPI_WEBHOOK_SECRET).update(`${timestamp}.${raw}`).digest('hex')}`;
+  const callback = await worker.fetch(request('/api/webhooks/youpi', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Gateway-Timestamp': timestamp, 'X-Gateway-Delivery-Id': event.deliveryId, 'X-Gateway-Event': event.event, 'X-Gateway-Signature-V2': signature }, body: raw }), env);
+  assert.equal(callback.status, 409);
+
+  const quote = await makeQuote('fulfillment_simulation_key_123');
+  await env.DB.prepare("UPDATE orders SET status='awaiting_payment' WHERE id=?").bind(quote.orderId).run();
+  await env.DB.prepare("UPDATE orders SET status='verification_pending' WHERE id=?").bind(quote.orderId).run();
+  await env.DB.prepare("INSERT INTO payment_attempts(id,order_id,gateway,gateway_payment_id,state,amount_paise,created_at,updated_at) VALUES('sim-attempt',?,'youpi','sim-payment','pending',?,?,?)")
+    .bind(quote.orderId, quote.totalPaise, new Date().toISOString(), new Date().toISOString()).run();
+  const verified = await worker.fetch(request(`/api/admin/orders/${quote.orderId}/verify-payment`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${env.ADMIN_TOKEN}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ bankRecordReference: 'sim-bank-ref-0001', amountPaise: quote.totalPaise, bankRecordDate: new Date().toISOString() }),
+  }), env);
+  assert.equal(verified.status, 200);
+  await env.DB.prepare("UPDATE orders SET status='supplier_purchase_pending' WHERE id=?").bind(quote.orderId).run();
+  const line = await env.DB.prepare('SELECT id FROM order_lines WHERE order_id=?').bind(quote.orderId).first();
+  await env.DB.prepare("INSERT INTO supplier_fulfilments(id,order_line_id,state,attempts,updated_at) VALUES('sim-fulfilment',?,'insufficient_balance',1,?)")
+    .bind(line.id, new Date().toISOString()).run();
+  await env.DB.prepare("UPDATE orders SET status='fulfilment_failed' WHERE id=?").bind(quote.orderId).run();
+  await env.DB.prepare("INSERT INTO audit_events(id,event_type,subject_id,details_json,created_at) VALUES('sim-balance-event','supplier_balance_insufficient',?,'{}',?)")
+    .bind(quote.orderId, new Date().toISOString()).run();
+  await env.DB.prepare("UPDATE orders SET status='supplier_purchase_pending' WHERE id=?").bind(quote.orderId).run();
+  await env.DB.prepare("UPDATE supplier_fulfilments SET state='supplier_pending',attempts=attempts+1,updated_at=? WHERE id='sim-fulfilment'").bind(new Date().toISOString()).run();
+  await env.DB.prepare("UPDATE orders SET status='supplier_pending' WHERE id=?").bind(quote.orderId).run();
+  await env.DB.prepare("UPDATE supplier_fulfilments SET state='delivery_failed',attempts=attempts+1,updated_at=? WHERE id='sim-fulfilment'").bind(new Date().toISOString()).run();
+  await env.DB.prepare("UPDATE orders SET status='fulfilment_failed' WHERE id=?").bind(quote.orderId).run();
+  await env.DB.prepare("UPDATE orders SET status='refunded' WHERE id=?").bind(quote.orderId).run();
+  await env.DB.prepare("INSERT INTO audit_events(id,event_type,subject_id,details_json,created_at) VALUES('sim-refund-event','refund_simulated',?,'{}',?)")
+    .bind(quote.orderId, new Date().toISOString()).run();
+  assert.equal(env.DB.prepare('SELECT status FROM orders WHERE id=?').bind(quote.orderId).first().status, 'refunded');
+  assert.deepEqual({ ...env.DB.prepare("SELECT state,attempts FROM supplier_fulfilments WHERE id='sim-fulfilment'").first() }, { state: 'delivery_failed', attempts: 3 });
+  assert.equal(env.SUPPLIER_PURCHASES_ENABLED, 'false');
+  assert.equal(env.YOUPI_LIVE_ENABLED, 'false');
   env.DB.sqlite.close();
 });

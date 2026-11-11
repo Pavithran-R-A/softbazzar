@@ -3,7 +3,7 @@ import { verifyYoupiWebhook } from './payment.js';
 import { parseProducts, supplierRequest } from './supplier.js';
 import { reconcileCatalogue } from './catalogue-sync.js';
 
-const json = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options':'DENY', 'X-Robots-Tag':'noindex, nofollow', 'Referrer-Policy':'strict-origin-when-cross-origin', 'Permissions-Policy':'camera=(), microphone=(), geolocation=()', 'Strict-Transport-Security':'max-age=31536000; includeSubDomains' } });
+const json = (value, status = 200, extraHeaders = {}) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options':'DENY', 'X-Robots-Tag':'noindex, nofollow', 'Referrer-Policy':'strict-origin-when-cross-origin', 'Permissions-Policy':'camera=(), microphone=(), geolocation=()', 'Strict-Transport-Security':'max-age=31536000; includeSubDomains', ...extraHeaders } });
 function secure(response, env) {
   const headers = new Headers(response.headers);
   headers.set('X-Content-Type-Options','nosniff'); headers.set('X-Frame-Options','DENY'); headers.set('Referrer-Policy','strict-origin-when-cross-origin');
@@ -63,6 +63,15 @@ export async function synchronize(env, fetchImpl = fetch) {
   }
 }
 
+export async function cleanupExpiredQuotes(env) {
+  const now = new Date().toISOString();
+  const results = await env.DB.batch([
+    env.DB.prepare("UPDATE orders SET status='cancelled',updated_at=? WHERE status='quoted' AND quote_expires_at<=?").bind(now, now),
+    env.DB.prepare('DELETE FROM quote_stock_reservations WHERE expires_at<=?').bind(now),
+  ]);
+  return { cancelled: results[0]?.meta?.changes || 0, released: results[1]?.meta?.changes || 0 };
+}
+
 async function publicCatalogue(env) {
   const [rows, pricing, latest] = await Promise.all([
     env.DB.prepare('SELECT p.supplier_id,p.name,p.description,p.cost_usdt,p.stock,p.is_unlimited,p.duration,p.requires_email,p.type,p.variants_json,pp.category,pp.image_url FROM products p LEFT JOIN product_presentation pp ON pp.supplier_id=p.supplier_id WHERE p.active=1 ORDER BY p.name').all(),
@@ -81,7 +90,7 @@ async function publicCatalogue(env) {
 }
 
 export default {
-  async scheduled(_event,env,ctx){ctx.waitUntil(synchronize(env));},
+  async scheduled(_event,env,ctx){ctx.waitUntil(Promise.allSettled([synchronize(env),cleanupExpiredQuotes(env)]));},
   async fetch(request,env){
     const url=new URL(request.url);
     if(url.pathname==='/api/health'&&request.method==='GET')return json({ok:true,supplierConfigured:Boolean(env.AITOOLSHOP_API_KEY),youpiConfigured:Boolean(env.YOUPI_GATEWAY_URL&&env.YOUPI_MERCHANT_ID&&env.YOUPI_MERCHANT_API_KEY),livePaymentsEnabled:false,supplierPurchasesEnabled:false});
@@ -90,8 +99,9 @@ export default {
     if(url.pathname==='/api/catalogue'&&request.method==='GET'){try{return json(await publicCatalogue(env));}catch{return json({error:'catalogue_unavailable'},503);}}
     const orderStatusMatch=url.pathname.match(/^\/api\/orders\/([0-9a-f-]{36})$/i);
     if(orderStatusMatch&&request.method==='GET'){
-      const order=await env.DB.prepare('SELECT id,status,currency,total_paise,merchant_usd_inr,created_at,updated_at FROM orders WHERE id=?').bind(orderStatusMatch[1]).first();
-      if(!order)return json({error:'order_not_found'},404);
+      const accessToken=request.headers.get('Authorization')?.replace(/^Bearer\s+/i,'')||'';
+      const order=await env.DB.prepare('SELECT id,status,currency,total_paise,merchant_usd_inr,created_at,updated_at,idempotency_key FROM orders WHERE id=?').bind(orderStatusMatch[1]).first();
+      if(!order||!safeEqual(accessToken,order.idempotency_key))return json({error:'order_not_found'},404);
       const lines=await env.DB.prepare('SELECT ol.name_snapshot,ol.quantity,ol.unit_price_paise,ps.approx_usd_cents FROM order_lines ol LEFT JOIN pricing_snapshots ps ON ps.order_line_id=ol.id WHERE ol.order_id=?').bind(order.id).all();
       const approxUsdTotalCents=lines.results.reduce((sum,line)=>sum+(line.approx_usd_cents||0)*line.quantity,0);
       return json({order:{id:order.id,status:order.status,currency:order.currency,totalPaise:order.total_paise,approxUsdTotalCents,merchantUsdInr:order.merchant_usd_inr||DEFAULT_USD_INR,createdAt:order.created_at,updatedAt:order.updated_at,items:lines.results.map((line)=>({name:line.name_snapshot,quantity:line.quantity,unitPricePaise:line.unit_price_paise,approxUsdCents:line.approx_usd_cents}))}});
@@ -99,6 +109,9 @@ export default {
     if(url.pathname==='/api/orders'&&request.method==='POST'){
       if(request.headers.get('Origin')!==url.origin)return json({error:'origin_rejected'},403);
       if(!request.headers.get('Content-Type')?.toLowerCase().startsWith('application/json'))return json({error:'json_required'},415);
+      const clientIp=request.headers.get('CF-Connecting-IP')||'';
+      if(!clientIp||!env.QUOTE_RATE_LIMITER||typeof env.QUOTE_RATE_LIMITER.limit!=='function')return json({error:'quote_protection_unavailable'},503);
+      try{const limit=await env.QUOTE_RATE_LIMITER.limit({key:`softbazzar:quote:${clientIp}`});if(!limit?.success)return json({error:'quote_rate_limited'},429,{'Retry-After':'60'});}catch{return json({error:'quote_protection_unavailable'},503);}
       const idempotencyKey=request.headers.get('Idempotency-Key')||'';if(!/^[A-Za-z0-9_-]{16,128}$/.test(idempotencyKey))return json({error:'idempotency_key_required'},400);
       let input;try{input=await readJsonLimited(request);}catch(error){return json({error:error instanceof RangeError?'payload_too_large':'invalid_json'},error instanceof RangeError?413:400);}
       if(!input||typeof input!=='object'||Array.isArray(input))return json({error:'invalid_items'},400);
@@ -155,7 +168,14 @@ export default {
     if(url.pathname.startsWith('/api/admin/')){
       const auth=request.headers.get('Authorization')?.replace(/^Bearer\s+/i,'')||'';
       if(!env.ADMIN_TOKEN||!safeEqual(auth,env.ADMIN_TOKEN))return json({error:'unauthorized'},401);
-      if(url.pathname==='/api/admin/sync'&&request.method==='POST')return json(await synchronize(env));
+      if(url.pathname==='/api/admin/sync'&&request.method==='POST'){
+        const result=await synchronize(env);const now=new Date().toISOString();
+        await env.DB.batch([
+          env.DB.prepare('INSERT INTO admin_actions(id,actor,action,target_id,created_at) VALUES(?,?,?,?,?)').bind(crypto.randomUUID(),'admin','manual_catalogue_sync',null,now),
+          env.DB.prepare('INSERT INTO audit_events(id,event_type,subject_id,details_json,created_at) VALUES(?,?,?,?,?)').bind(crypto.randomUUID(),'manual_catalogue_sync',null,JSON.stringify({imported:result.imported||0,updated:result.updated||0,removed:result.removed||0,skipped:Boolean(result.skipped),failed:Boolean(result.error)}),now),
+        ]);
+        return json(result);
+      }
       if(url.pathname==='/api/admin/overview'&&request.method==='GET'){
         const [catalogue,pricing,runs,orders]=await Promise.all([
           env.DB.prepare('SELECT COUNT(*) AS count,SUM(CASE WHEN active=1 THEN 1 ELSE 0 END) AS active,SUM(CASE WHEN active=1 AND is_unlimited=0 AND stock=0 THEN 1 ELSE 0 END) AS depleted FROM products').first(),

@@ -50,8 +50,9 @@ Authorized rate changes receive immutable audit records.
 For isolated staging, create `softbazzar-staging` D1.
 Set its identifier under `env.staging.d1_databases`.
 Apply staging migrations before deploying the Worker.
-Add secrets with `wrangler secret put AITOOLSHOP_API_KEY --env staging`.
-Keep the supplier secret unset until owner configuration.
+The staging supplier secret is owner-configured.
+Confirm names using `wrangler secret list --env staging`.
+Never print, copy, or log secret values.
 Add `ADMIN_TOKEN` only through Wrangler secrets.
 Keep YouPI credentials unset during this review.
 Deploy staging with `wrangler deploy --env staging`.
@@ -85,3 +86,37 @@ public/           static assets
 Existing catalogue records remain recoverable through Git history.
 Do not enable live payment or supplier purchase flags.
 The fixture in `fixtures/catalogue.dev.json` is never loaded in production.
+
+## Checkout qualification
+
+Public quote creation uses a Cloudflare Rate Limiting binding.
+Limits are approximate and per Cloudflare location.
+Database reservations still enforce available stock.
+Quote reservations expire after five minutes.
+Scheduled cleanup cancels expired quotes and releases stock.
+Order status requires a session-held quote capability.
+
+YouPI-PG is not a deployed dependency.
+Its upstream README limits use to experiments.
+Its package metadata declares a commercial license.
+The referenced upstream LICENSE currently returns not found.
+Commercial payment use needs written license clarification.
+Its upstream threat guidance rejects production-readiness claims.
+Payments remain disabled pending independent approval.
+
+Before launch, define refund timing and processing.
+Define delivery commitments and escalation ownership.
+Confirm product licensing and support coverage.
+Document disputes and bank reconciliation procedures.
+Obtain qualified legal and bank review.
+
+## Catalogue presentation
+
+Homepage families derive from supplier product names.
+Ambiguous multi-brand listings remain standalone offers.
+Featured order is editorial, never popularity-ranked.
+All supplier offers remain searchable on `/products`.
+Cart and quotes retain supplier product identifiers.
+Variant products require a selected available option.
+Browser regressions use mocked inventory and quotes.
+Run them with `npm run test:browser`.

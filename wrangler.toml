@@ -44,3 +44,11 @@ SUPPLIER_PURCHASES_ENABLED = "false"
 YOUPI_LIVE_ENABLED = "false"
 STALE_CATALOGUE_MINUTES = "10"
 STAGING_ENV = "true"
+
+[[env.staging.ratelimits]]
+name = "QUOTE_RATE_LIMITER"
+namespace_id = "821103208"
+
+[env.staging.ratelimits.simple]
+limit = 10
+period = 60

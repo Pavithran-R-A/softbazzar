@@ -16,7 +16,7 @@ export class YoupiPaymentAdapter {
     const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), 8000);
     try {
       const response = await this.fetchImpl(new URL('/api/v1/payments', endpoint), {
-        method: 'POST', signal: controller.signal,
+        method: 'POST', signal: controller.signal, redirect: 'manual',
         headers: { 'Content-Type': 'application/json', 'X-Merchant-Id': this.env.YOUPI_MERCHANT_ID, 'X-Merchant-Key': this.env.YOUPI_MERCHANT_API_KEY, 'Idempotency-Key': idempotencyKey },
         body: JSON.stringify({ orderId, amount: (amountPaise / 100).toFixed(2), currency: 'INR' }),
       });
