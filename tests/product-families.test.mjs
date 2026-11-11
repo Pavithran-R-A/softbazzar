@@ -34,3 +34,21 @@ test('out of stock offers do not define starting price', () => {
   assert.equal(family.availableOffers, 1);
   assert.equal(family.startingPricePaise, 3000);
 });
+
+test('variant offers determine family starting price', () => {
+  const [family] = deriveProductFamilies([{
+    ...item('variant-price', 'ChatGPT Business', 9000),
+    variants: [
+      { id: 'available', inStock: true, priceInrPaise: 7000 },
+      { id: 'cheaper-but-sold', inStock: false, disabled: true, priceInrPaise: 1000 },
+    ],
+  }]);
+  assert.equal(family.startingPricePaise, 7000);
+});
+
+test('standalone offer slugs preserve unique supplier IDs', () => {
+  const ids = ['SKU:A', 'SKU/A', `${'x'.repeat(80)}1`, `${'x'.repeat(80)}2`];
+  const families = deriveProductFamilies(ids.map((id) => item(id, 'Unmatched supplier listing', 1000)));
+  assert.equal(new Set(families.map(({ slug }) => slug)).size, ids.length);
+  assert.deepEqual(families.flatMap(({ products: offers }) => offers.map(({ id }) => id)).sort(), [...ids].sort());
+});

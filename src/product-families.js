@@ -22,8 +22,19 @@ const FAMILY_RULES = [
 
 const MERCHANDISING_ORDER = FAMILY_RULES.map(({ slug }) => slug);
 
-function safeSlug(value) {
-  return String(value).normalize('NFKD').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48) || 'offer';
+function standaloneSlug(id) {
+  const bytes = new TextEncoder().encode(String(id));
+  return `offer-${[...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('') || 'empty'}`;
+}
+
+function sellablePrices(product) {
+  if (Array.isArray(product.variants) && product.variants.length) {
+    return product.variants
+      .filter((variant) => !variant.disabled && variant.inStock !== false)
+      .map((variant) => Number(variant.priceInrPaise))
+      .filter(Number.isSafeInteger);
+  }
+  return product.inStock === false ? [] : [Number(product.priceInrPaise)].filter(Number.isSafeInteger);
 }
 
 export function deriveProductFamilies(products) {
@@ -31,7 +42,7 @@ export function deriveProductFamilies(products) {
   for (const product of products) {
     const matches = FAMILY_RULES.filter((rule) => rule.pattern.test(product.name));
     const rule = matches.length === 1 ? matches[0] : null;
-    const family = rule ?? { slug: `offer-${safeSlug(product.id)}`, name: product.name, icon: product.icon, standalone: true };
+    const family = rule ?? { slug: standaloneSlug(product.id), name: product.name, icon: product.icon, standalone: true };
     const current = grouped.get(family.slug) ?? { ...family, products: [] };
     current.products.push(product);
     grouped.set(family.slug, current);
@@ -39,11 +50,12 @@ export function deriveProductFamilies(products) {
   return [...grouped.values()].map((family) => {
     const offers = [...family.products].sort((left, right) => Number(left.priceInrPaise) - Number(right.priceInrPaise));
     const availableOffers = offers.filter((product) => product.inStock);
+    const availablePrices = offers.flatMap(sellablePrices);
     return {
       ...family,
       products: offers,
       availableOffers: availableOffers.length,
-      startingPricePaise: availableOffers[0]?.priceInrPaise ?? offers[0]?.priceInrPaise ?? null,
+      startingPricePaise: availablePrices.length ? Math.min(...availablePrices) : null,
       featuredRank: MERCHANDISING_ORDER.indexOf(family.slug),
     };
   }).sort((left, right) => {
