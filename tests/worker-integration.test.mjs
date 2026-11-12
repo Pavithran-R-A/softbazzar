@@ -573,3 +573,110 @@ test('mock lifecycle covers cancellation, balance failure, delivery failure, and
   assert.equal(env.YOUPI_LIVE_ENABLED, 'false');
   env.DB.sqlite.close();
 });
+
+test('unchanged catalogue preserves timestamps and stock snapshots', async () => {
+  const env = await createEnv();
+  await synchronize(env, async () => supplierResponse(rows));
+  const before = env.DB.prepare('SELECT supplier_id,updated_at FROM products ORDER BY supplier_id').all().results;
+  const snapshots = env.DB.prepare('SELECT COUNT(*) AS count FROM stock_snapshots').first().count;
+  await synchronize(env, async () => supplierResponse(rows));
+  assert.deepEqual(env.DB.prepare('SELECT supplier_id,updated_at FROM products ORDER BY supplier_id').all().results, before);
+  assert.equal(env.DB.prepare('SELECT COUNT(*) AS count FROM stock_snapshots').first().count, snapshots);
+  env.DB.sqlite.close();
+});
+
+test('expired invocation cannot overwrite a newer catalogue', async () => {
+  const env = await createEnv();
+  let release; let started;
+  const waiting = new Promise(resolve => { started = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  const old = synchronize(env, async () => { started(); await gate; return supplierResponse(rows); });
+  await waiting;
+  env.DB.prepare("UPDATE sync_runs SET started_at=? WHERE status='running'").bind('2020-01-01T00:00:00.000Z').run();
+  const fresh = await synchronize(env, async () => supplierResponse([{...rows[0], your_cost:'22'}]));
+  release();
+  assert.equal(fresh.imported, 1);
+  assert.deepEqual(await old, { error:'lease_expired' });
+  assert.equal(env.DB.prepare('SELECT cost_usdt FROM products WHERE supplier_id=?').bind('sku-email').first().cost_usdt, '22');
+  env.DB.sqlite.close();
+});
+
+test('database quota failures propagate instead of reporting lock conflicts', async () => {
+  const env = await createEnv();
+  const original = env.DB.prepare.bind(env.DB);
+  env.DB.prepare = (sql) => sql.startsWith('INSERT INTO sync_runs(started_at,status)')
+    ? { bind: () => ({ first: () => { throw new Error('D1 write quota exceeded'); } }) }
+    : original(sql);
+  await assert.rejects(synchronize(env, async () => supplierResponse(rows)), /quota exceeded/);
+  env.DB.sqlite.close();
+});
+
+test('interrupted import batch preserves the prior catalogue', async () => {
+  const env = await createEnv();
+  await synchronize(env, async () => supplierResponse(rows));
+  const batch = env.DB.batch.bind(env.DB);
+  env.DB.batch = statements => {
+    if (statements.some(statement => statement.sql.includes('UPDATE products SET'))) {
+      return batch([...statements.slice(0, 1), env.DB.prepare('INSERT INTO missing_table VALUES (1)')]);
+    }
+    return batch(statements);
+  };
+  assert.deepEqual(await synchronize(env, async () => supplierResponse([{...rows[0], your_cost:'22'}])), {error:'sync_failed'});
+  assert.equal(env.DB.prepare('SELECT cost_usdt FROM products WHERE supplier_id=?').bind('sku-email').first().cost_usdt, '10');
+  assert.equal(env.DB.prepare("SELECT COUNT(*) AS n FROM products WHERE active=1").first().n, 2);
+  env.DB.sqlite.close();
+});
+
+test('abandoned lease recovers after database writes resume', async () => {
+  const env = await createEnv();
+  env.DB.prepare("INSERT INTO sync_runs(started_at,status) VALUES (?, 'running')").bind('2020-01-01T00:00:00.000Z').run();
+  const original = env.DB.prepare.bind(env.DB);
+  let blocked = true;
+  env.DB.prepare = sql => {
+    if (blocked && sql.startsWith('INSERT INTO sync_runs(started_at,status)')) return {bind: () => ({first: () => {throw new Error('D1 write quota exceeded');}})};
+    return original(sql);
+  };
+  await assert.rejects(synchronize(env, async () => supplierResponse(rows)), /quota/);
+  assert.equal(original("SELECT status FROM sync_runs WHERE id=1").first().status, 'running');
+  blocked = false;
+  assert.equal((await synchronize(env, async () => supplierResponse(rows))).imported, 2);
+  assert.equal(original('SELECT error_code FROM sync_runs WHERE id=1').first().error_code, 'stale_lock');
+  env.DB.sqlite.close();
+});
+
+test('malformed supplier response retains prior inventory', async () => {
+  const env = await createEnv();
+  await synchronize(env, async () => supplierResponse(rows));
+  assert.deepEqual(await synchronize(env, async () => new Response(JSON.stringify({success:true,count:2,products:[rows[0]]}))), {error:'sync_failed'});
+  assert.equal(env.DB.prepare('SELECT COUNT(*) AS n FROM products WHERE active=1').first().n, 2);
+  env.DB.sqlite.close();
+});
+
+test('presentation, stock, removal and reactivation change independently', async () => {
+  const env = await createEnv();
+  await synchronize(env, async () => supplierResponse(rows));
+  const initial = env.DB.prepare('SELECT updated_at FROM products WHERE supplier_id=?').bind('sku-email').first().updated_at;
+  await synchronize(env, async () => supplierResponse([{...rows[0], image_url:'https://example.test/a.png'}, rows[1]]));
+  assert.equal(env.DB.prepare('SELECT updated_at FROM products WHERE supplier_id=?').bind('sku-email').first().updated_at, initial);
+  assert.equal(env.DB.prepare('SELECT image_url FROM product_presentation WHERE supplier_id=?').bind('sku-email').first().image_url, 'https://example.test/a.png');
+  await synchronize(env, async () => supplierResponse([{...rows[0], stock_quantity:1}]));
+  assert.equal(env.DB.prepare('SELECT COUNT(*) AS n FROM stock_snapshots WHERE supplier_id=?').bind('sku-email').first().n, 2);
+  assert.equal(env.DB.prepare('SELECT active FROM products WHERE supplier_id=?').bind('sku-unlimited').first().active, 0);
+  await synchronize(env, async () => supplierResponse(rows));
+  assert.equal(env.DB.prepare('SELECT active FROM products WHERE supplier_id=?').bind('sku-unlimited').first().active, 1);
+  env.DB.sqlite.close();
+});
+
+test('identical 191-product imports only write sync history', async () => {
+  const env = await createEnv();
+  const catalogue = Array.from({length:191}, (_,i) => ({id:String(i), name:`Product ${i}`, your_cost:'1', stock_quantity:3}));
+  await synchronize(env, async () => supplierResponse(catalogue));
+  const before = env.DB.prepare('SELECT total_changes() AS n').first().n;
+  await synchronize(env, async () => supplierResponse(catalogue));
+  assert.equal(env.DB.prepare('SELECT total_changes() AS n').first().n - before, 2);
+  const next = catalogue.map((p,i) => i === 0 ? {...p, your_cost:'2'} : p);
+  const beforeChange = env.DB.prepare('SELECT total_changes() AS n').first().n;
+  await synchronize(env, async () => supplierResponse(next));
+  assert.equal(env.DB.prepare('SELECT total_changes() AS n').first().n - beforeChange, 3);
+  env.DB.sqlite.close();
+});

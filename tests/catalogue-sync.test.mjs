@@ -64,3 +64,14 @@ test('supplier credentials stay server-side and requests remain read-only', asyn
   assert.equal(captured.options.body, undefined);
   await assert.rejects(supplierRequest('/products', { env: {}, fetchImpl }), /credentials/);
 });
+
+test('supplier timeout aborts the request', async () => {
+  const start = Date.now();
+  await assert.rejects(supplierRequest('/products', {
+    env: { AITOOLSHOP_API_KEY: 'fixture' }, attempts: 1,
+    fetchImpl: (_url, {signal}) => new Promise((_resolve, reject) => {
+      signal.addEventListener('abort', () => reject(new Error('request timed out')), {once:true});
+    }),
+  }), /timed out/);
+  assert.ok(Date.now() - start < 11000);
+});

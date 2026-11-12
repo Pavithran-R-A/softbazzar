@@ -47,29 +47,46 @@ export async function synchronize(env, fetchImpl = fetch) {
     return {skipped:true,reason:'supplier_not_configured'};
   }
   try { runId = (await env.DB.prepare("INSERT INTO sync_runs(started_at,status) VALUES (?, 'running') RETURNING id").bind(started).first()).id; }
-  catch {
+  catch (error) {
+    if (!/unique constraint/i.test(String(error?.message))) throw error;
+    const running = await env.DB.prepare("SELECT id FROM sync_runs WHERE status='running' LIMIT 1").first();
+    if (!running) throw error;
     const staleLock = await env.DB.prepare("SELECT id FROM sync_runs WHERE status='running' AND started_at < ? LIMIT 1").bind(new Date(Date.now()-10*60000).toISOString()).first();
     if (!staleLock) return { skipped: true, reason: 'sync_already_running' };
     await env.DB.prepare("UPDATE sync_runs SET status='failed',finished_at=?,error_code='stale_lock' WHERE id=? AND status='running'").bind(started,staleLock.id).run();
     try { runId = (await env.DB.prepare("INSERT INTO sync_runs(started_at,status) VALUES (?, 'running') RETURNING id").bind(started).first()).id; }
-    catch { return { skipped: true, reason: 'sync_already_running' }; }
+    catch (error) {
+      if (!/unique constraint/i.test(String(error?.message))) throw error;
+      const current = await env.DB.prepare("SELECT id FROM sync_runs WHERE status='running' LIMIT 1").first();
+      if (!current) throw error;
+      return { skipped: true, reason: 'sync_already_running' };
+    }
   }
   try {
     const products = parseProducts(await supplierRequest('/products', { env, fetchImpl }));
     if (!products.length) throw new Error('empty_supplier_catalogue');
-    const existingRows = await env.DB.prepare('SELECT p.supplier_id,p.name,p.description,p.cost_usdt,p.stock,p.is_unlimited,p.duration,p.requires_email,p.type,p.active,p.variants_json,pp.image_url FROM products p LEFT JOIN product_presentation pp ON pp.supplier_id=p.supplier_id').all();
+    const existingRows = await env.DB.prepare('SELECT p.supplier_id,p.name,p.description,p.cost_usdt,p.stock,p.is_unlimited,p.duration,p.requires_email,p.type,p.active,p.variants_json,pp.category,pp.image_url FROM products p LEFT JOIN product_presentation pp ON pp.supplier_id=p.supplier_id').all();
     const plan = reconcileCatalogue(existingRows.results, products);
-    const stmts = products.flatMap((p) => [
-      env.DB.prepare(`INSERT INTO products(supplier_id,name,description,cost_usdt,stock,is_unlimited,duration,requires_email,type,active,updated_at,variants_json) VALUES(?,?,?,?,?,?,?,?,?,1,?,?) ON CONFLICT(supplier_id) DO UPDATE SET name=excluded.name,description=excluded.description,cost_usdt=excluded.cost_usdt,stock=excluded.stock,is_unlimited=excluded.is_unlimited,duration=excluded.duration,requires_email=excluded.requires_email,type=excluded.type,active=1,updated_at=excluded.updated_at,variants_json=excluded.variants_json`).bind(p.id,p.name,p.description,String(p.costUsdt),p.stock,p.unlimited?1:0,p.duration,p.requiresEmail?1:0,p.type,started,JSON.stringify(p.variants)),
-      env.DB.prepare('INSERT INTO product_presentation(supplier_id,category,image_url) VALUES(?,?,?) ON CONFLICT(supplier_id) DO UPDATE SET category=excluded.category,image_url=excluded.image_url').bind(p.id,p.type,p.imageUrl),
-    ]);
-    for (const p of plan.changed) stmts.push(env.DB.prepare('INSERT INTO stock_snapshots(supplier_id,stock,is_unlimited,observed_at) VALUES(?,?,?,?)').bind(p.id,p.stock,p.unlimited?1:0,started));
-    for (const id of plan.removed) stmts.push(env.DB.prepare('UPDATE products SET active=0,updated_at=? WHERE supplier_id=?').bind(started,id));
-    stmts.push(env.DB.prepare("UPDATE sync_runs SET finished_at=?,status='success',imported=?,updated=? WHERE id=?").bind(new Date().toISOString(),plan.imported,plan.updated,runId));
-    await env.DB.batch(stmts);
+    // The D1 batch is atomic. Each write checks the same lease owner.
+    const cutoff = new Date(Date.now() - 10 * 60000).toISOString();
+    const guard = "EXISTS (SELECT 1 FROM sync_runs WHERE id=? AND status='running' AND started_at>?)";
+    const prior = new Map(existingRows.results.map((row) => [row.supplier_id, row]));
+    const stmts = plan.changed.map((p) => {
+      const values = { name:p.name, description:p.description, cost_usdt:String(p.costUsdt), stock:p.stock, is_unlimited:p.unlimited?1:0, duration:p.duration, requires_email:p.requiresEmail?1:0, type:p.type, active:1, variants_json:JSON.stringify(p.variants) };
+      const previous = prior.get(p.id);
+      if (!previous) return env.DB.prepare(`INSERT INTO products(supplier_id,name,description,cost_usdt,stock,is_unlimited,duration,requires_email,type,active,updated_at,variants_json) SELECT ?,?,?,?,?,?,?,?,?,1,?,? WHERE ${guard}`).bind(p.id,p.name,p.description,String(p.costUsdt),p.stock,p.unlimited?1:0,p.duration,p.requiresEmail?1:0,p.type,started,JSON.stringify(p.variants),runId,cutoff);
+      const changes = Object.entries(values).filter(([key,value]) => key === 'variants_json' ? JSON.stringify(JSON.parse(previous[key]||'[]')) !== value : previous[key] !== value);
+      return env.DB.prepare(`UPDATE products SET ${changes.map(([key]) => `${key}=?`).join(',')},updated_at=? WHERE supplier_id=? AND ${guard}`).bind(...changes.map(([,value]) => value),started,p.id,runId,cutoff);
+    });
+    for (const p of plan.presentationChanged) stmts.push(env.DB.prepare(`INSERT INTO product_presentation(supplier_id,category,image_url) SELECT ?,?,? WHERE ${guard} ON CONFLICT(supplier_id) DO UPDATE SET category=excluded.category,image_url=excluded.image_url`).bind(p.id,p.type,p.imageUrl,runId,cutoff));
+    for (const p of plan.stockChanged) stmts.push(env.DB.prepare(`INSERT INTO stock_snapshots(supplier_id,stock,is_unlimited,observed_at) SELECT ?,?,?,? WHERE ${guard}`).bind(p.id,p.stock,p.unlimited?1:0,started,runId,cutoff));
+    for (const id of plan.removed) stmts.push(env.DB.prepare(`UPDATE products SET active=0,updated_at=? WHERE supplier_id=? AND ${guard}`).bind(started,id,runId,cutoff));
+    stmts.push(env.DB.prepare("UPDATE sync_runs SET finished_at=?,status='success',imported=?,updated=? WHERE id=? AND status='running' AND started_at>?").bind(new Date().toISOString(),plan.imported,plan.updated,runId,cutoff));
+    const results = await env.DB.batch(stmts);
+    if (!results.at(-1)?.meta?.changes) return { error:'lease_expired' };
     return { imported: plan.imported, updated: plan.updated, removed: plan.removed.length };
   } catch (error) {
-    await env.DB.prepare("UPDATE sync_runs SET finished_at=?,status='failed',error_code=? WHERE id=?").bind(new Date().toISOString(),String(error?.message||'sync_failed').slice(0,80),runId).run();
+    await env.DB.prepare("UPDATE sync_runs SET finished_at=?,status='failed',error_code=? WHERE id=? AND status='running'").bind(new Date().toISOString(),String(error?.message||'sync_failed').slice(0,80),runId).run();
     console.error(JSON.stringify({ event:'catalogue_sync_failed', code:String(error?.message||'sync_failed').slice(0,80) })); return { error:'sync_failed' };
   }
 }
@@ -101,7 +118,7 @@ async function publicCatalogue(env) {
 }
 
 export default {
-  async scheduled(_event,env,ctx){ctx.waitUntil(Promise.allSettled([synchronize(env),cleanupExpiredQuotes(env)]));},
+  async scheduled(_event,env,ctx){ctx.waitUntil(Promise.all([synchronize(env).then((result)=>{if(result.error) throw new Error(result.error);return result;}),cleanupExpiredQuotes(env)]));},
   async fetch(request,env){
     const url=new URL(request.url);
     if(url.pathname==='/api/health'&&request.method==='GET')return json({ok:true,supplierConfigured:Boolean(env.AITOOLSHOP_API_KEY),youpiConfigured:Boolean(env.YOUPI_GATEWAY_URL&&env.YOUPI_MERCHANT_ID&&env.YOUPI_MERCHANT_API_KEY),livePaymentsEnabled:false,supplierPurchasesEnabled:false});

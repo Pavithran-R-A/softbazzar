@@ -138,12 +138,14 @@ test('inactive quote replay preserves cart contents', async ({ page }) => {
 test('layout remains inside target responsive widths', async ({ page }) => {
   for (const width of [320, 375, 390, 480, 768, 1024, 1280, 1440, 1920]) {
     await page.setViewportSize({ width, height: 900 });
-    await page.goto('/');
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await expect(page.locator('#main-content')).toBeVisible();
     const dimensions = await page.evaluate(() => ({ viewport: document.documentElement.clientWidth, document: document.documentElement.scrollWidth }));
     expect(dimensions.document, `document overflow at ${width}px`).toBeLessThanOrEqual(dimensions.viewport + 1);
   }
   await page.setViewportSize({ width: 1280, height: 900 });
-  await page.goto('/');
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(page.locator('#main-content')).toBeVisible();
   for (const zoom of ['125%', '200%']) {
     await page.evaluate((value) => { document.documentElement.style.zoom = value; }, zoom);
     const dimensions = await page.evaluate(() => ({ viewport: document.documentElement.clientWidth, document: document.documentElement.scrollWidth }));

@@ -8,7 +8,6 @@ function sameProduct(previous, next) {
     && previous.duration === next.duration
     && Boolean(previous.requires_email) === next.requiresEmail
     && previous.type === next.type
-    && (previous.image_url??null) === (next.imageUrl??null)
     && JSON.stringify(JSON.parse(previous.variants_json||'[]')) === JSON.stringify(next.variants||[]);
 }
 
@@ -28,7 +27,18 @@ export function reconcileCatalogue(existingRows, products) {
     .map((row) => row.supplier_id);
   const imported = products.filter(({ id }) => !existing.has(id)).length;
 
+  const presentationChanged = products.filter((product) => {
+    const previous = existing.get(product.id);
+    return !previous || previous.category !== product.type || (previous.image_url ?? null) !== (product.imageUrl ?? null);
+  });
+  const stockChanged = products.filter((product) => {
+    const previous = existing.get(product.id);
+    return !previous || previous.stock !== (product.stock ?? null) || Boolean(previous.is_unlimited) !== product.unlimited || !previous.active;
+  });
+
   return Object.freeze({
+    presentationChanged: Object.freeze(presentationChanged),
+    stockChanged: Object.freeze(stockChanged),
     changed: Object.freeze(changed),
     removed: Object.freeze(removed),
     imported,

@@ -120,3 +120,11 @@ Cart and quotes retain supplier product identifiers.
 Variant products require a selected available option.
 Browser regressions use mocked inventory and quotes.
 Run them with `npm run test:browser`.
+
+### Catalogue sync capacity and recovery
+
+The scheduled job polls every two minutes. It writes only changed catalogue rows, presentation rows, and stock snapshots. Each run records its lease and completion. The batch checks lease ownership before every catalogue write. A failed batch leaves the previous catalogue intact.
+
+On 2026-11-12, seven-day D1 Insights reported 156,386 writes for 78,097 product UPSERTs and 72,167 writes for 72,059 presentation UPSERTs. The old catalogue join averaged 381 rows read. These are historical observations, not optimized-production measurements. A local SQLite test of 191 identical products records two changed table rows per sync, excluding index writes. Historical sync-run insert and completion averages were two billed writes each: approximately 2,880 daily writes for 720 unchanged syncs, plus other account activity. The join suggests roughly 274,320 daily reads at 191 products, plus lock checks, cleanup and storefront queries. At 1,000 products, a simple two-row-per-product estimate is 1.44 million daily reads, plus other work. Supplier changes and indexes add writes. Confirm optimized usage with D1 Insights after authorized deployment; account-wide usage and headroom remain unmeasured.
+
+Before recovery, verify the daily quota reset and record the current Worker deployment and version. Pause the staging trigger with `crons = []` only after authorization. Deploy the reviewed Worker with the trigger paused; let the expired lease recover through the normal sync path, and inspect results without exposing credentials. Verify three imports, freshness, stock, pricing and a quote. Restore `crons = ["*/2 * * * *"]` only after qualification and authorization. For rollback, deploy the recorded prior Worker version and restore the prior trigger configuration separately. Worker rollback alone does not revert D1 data. Do not manually edit the stuck run without a separate reviewed plan.
