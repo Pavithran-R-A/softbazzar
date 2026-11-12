@@ -16,6 +16,18 @@ test('unsafe supplier payment and contact claims are withheld', () => {
   assert.equal(sanitizeSupplierDescription(description), SUPPLIER_NOTES_WITHHELD);
   assert.equal(sanitizeSupplierDescription('javascript:alert(1)'), SUPPLIER_NOTES_WITHHELD);
   assert.equal(sanitizeSupplierDescription('Your cost is 10 USDT'), SUPPLIER_NOTES_WITHHELD);
+  assert.equal(sanitizeSupplierDescription('Email seller@example.test to place your order.'), SUPPLIER_NOTES_WITHHELD);
+  assert.equal(sanitizeSupplierDescription('Contact the supplier through WhatsApp for payment.'), SUPPLIER_NOTES_WITHHELD);
+});
+
+test('live supplier description examples are reviewed safely', () => {
+  const liveApiListing = 'Sign up for an account at https://api.mwapi.dev/ and purchase API credits.';
+  const liveAccountListing = 'Format: mail | Password | 2FA. 2FA site: https://2fa.live';
+  const liveGraphicsListing = 'A collection of graphics resources, design assets, and templates.';
+
+  assert.equal(sanitizeSupplierDescription(liveApiListing), SUPPLIER_NOTES_WITHHELD);
+  assert.equal(sanitizeSupplierDescription(liveAccountListing), SUPPLIER_NOTES_WITHHELD);
+  assert.equal(sanitizeSupplierDescription(liveGraphicsListing), liveGraphicsListing);
 });
 
 test('safe supplier descriptions stay bounded plain text', () => {

@@ -61,6 +61,31 @@ test('full catalogue defaults to editorial family priority', async ({ page }) =>
   await expect(page.locator('.product-name').first()).toHaveText('Canva Pro Plan');
 });
 
+test('direct product and family routes refresh with valid assets', async ({ page }) => {
+  const browserErrors = [];
+  page.on('pageerror', (error) => browserErrors.push(error.message));
+
+  await page.goto('/product/chatgpt-monthly');
+  await expect(page.getByRole('heading', { name: 'ChatGPT Business Monthly' })).toBeVisible();
+  const assets = await page.evaluate(() => performance.getEntriesByType('resource')
+    .map((entry) => entry.name)
+    .filter((url) => /\.(?:js|css)(?:\?|$)/.test(url)));
+  expect(assets.length).toBeGreaterThanOrEqual(1);
+  for (const url of assets) {
+    const response = await page.request.get(url);
+    expect(response.status()).toBe(200);
+    const contentType = response.headers()['content-type'] || '';
+    expect(contentType).toMatch(/(?:javascript|ecmascript|text\/css)/i);
+  }
+
+  await page.reload();
+  await expect(page.getByRole('heading', { name: 'ChatGPT Business Monthly' })).toBeVisible();
+  await page.goto('/collection/chatgpt');
+  await expect(page.getByRole('heading', { name: 'ChatGPT', exact: true })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Choose option' })).toBeVisible();
+  expect(browserErrors).toEqual([]);
+});
+
 test('mobile checkout remains usable and quote-only', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/');
