@@ -1,13 +1,12 @@
 import './index.css';
-import { inject } from '@vercel/analytics';
-inject();
 import logoUrl from './assets/logo.png';
-import { brandIcons, products, categories } from './data.js';
-import { calculateCartTotal, normalizeStoredCart, readStoredCart, resolveCartItems, resolveSelection, writeStoredCart } from './cart-model.js';
+import { brandIcons, products, categories, setCatalogue } from './data.js';
+import { calculateCartTotalPaise, normalizeStoredCart, readStoredCart, resolveCartItems, resolveSelection, writeStoredCart } from './cart-model.js';
 import { privacyPage, termsPage, TELEGRAM } from './pages.js';
+import { sanitizeHTML } from './text-security.js';
+import { deriveProductFamilies, editorialProductOrder, featuredProductFamilies, findProductFamily } from './product-families.js';
 
-const sanitizeHTML = (str) => typeof str === 'string' ? str.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&#39;"}[m])) : str;
-
+const formatInr = (value) => Number(value).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const chevronSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clip-rule="evenodd"/></svg>`;
 const cartSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 002 1.61h9.72a2 2 0 002-1.61L23 6H6"/></svg>`;
 const backSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M17 10a.75.75 0 01-.75.75H5.612l4.158 3.96a.75.75 0 11-1.04 1.08l-5.5-5.25a.75.75 0 010-1.08l5.5-5.25a.75.75 0 111.04 1.08L5.612 9.25H16.25A.75.75 0 0117 10z" clip-rule="evenodd"/></svg>`;
@@ -16,26 +15,29 @@ const telegramSvg = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none"
 const closeSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>`;
 const trashSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>`;
 const VIDEO_URL = 'https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260328_065045_c44942da-53c6-4804-b734-f9e07fc22e08.mp4';
+const savedCartSnapshot = (() => { try { return JSON.parse(localStorage.getItem('sb_cart_v2') || '[]'); } catch { return []; } })();
 
 // === CART STATE ===
 let cart = readStoredCart();
+let adminToken = '';
+let cataloguePurchasable=false;
+let productFamilies=[];
 
 function saveCart() {
   cart = normalizeStoredCart(cart);
-  writeStoredCart(cart);
+  if (!writeStoredCart(cart)) showToast('Cart storage is unavailable in this browser.');
 }
 
 function addToCart(id, variantName = null) {
   const selection = resolveSelection(id, variantName || null);
   if (!selection) return;
-  const existing = cart.find(item => item.id === selection.id && item.variantName === selection.variantName);
-  if (existing) {
-    existing.qty = Math.min(99, (existing.qty || 1) + 1);
-    showToast('Increased quantity!');
-  } else {
-    cart.push({ id: selection.id, variantName: selection.variantName, qty: 1 });
-    showToast('Added to cart!');
-  }
+  const exists = cart.some(item => item.id === selection.id && item.variantName === selection.variantName);
+  const matching = cart.find(item => item.id === selection.id && item.variantName === selection.variantName);
+  if (exists && matching.qty >= selection.maxQuantity) { showToast('Supplier stock limit reached.'); return; }
+  cart = exists
+    ? cart.map(item => item === matching ? { ...item, qty: Math.min(selection.maxQuantity, item.qty + 1) } : item)
+    : [...cart, { id: selection.id, variantName: selection.variantName, qty: 1 }];
+  showToast(exists ? 'Increased quantity!' : 'Added to cart!');
   saveCart();
   updateCartBadge();
   if (document.querySelector('.cart-drawer.open')) renderCartItems();
@@ -53,11 +55,15 @@ function updateQuantity(id, variantName, delta) {
   const normalizedVariant = variantName || null;
   const item = cart.find(entry => entry.id === id && entry.variantName === normalizedVariant);
   if (!item) return;
-  item.qty = (item.qty || 1) + delta;
-  if (item.qty <= 0) {
+  const selection = resolveSelection(id, normalizedVariant);
+  if (!selection) return;
+  const nextQty = (item.qty || 1) + delta;
+  if (nextQty <= 0) {
     removeFromCart(id, normalizedVariant);
     return;
   }
+  if (nextQty > selection.maxQuantity) { showToast('Supplier stock limit reached.'); return; }
+  cart = cart.map(entry => entry === item ? { ...entry, qty: nextQty } : entry);
   saveCart();
   updateCartBadge();
   renderCartItems();
@@ -65,12 +71,22 @@ function updateQuantity(id, variantName, delta) {
 }
 
 function getCartTotal() {
-  return calculateCartTotal(cart);
+  return calculateCartTotalPaise(cart)/100;
+}
+
+function getCartTotalUsdCents() {
+  const items=resolveCartItems(cart);
+  if(items.some((item)=>item.lineTotalUsdCents===null))return null;
+  return items.reduce((sum,item)=>sum+item.lineTotalUsdCents,0);
 }
 
 function updateCartBadge() {
+  const count = cart.reduce((total, item) => total + item.qty, 0);
+  const label = count === 1 ? '1 item' : `${count} items`;
+  document.querySelectorAll('.cart-btn').forEach((button) => button.setAttribute('aria-label', `Cart, ${label}`));
   document.querySelectorAll('.cart-badge').forEach(b => {
-    b.textContent = cart.length || '';
+    b.textContent = count ? (count > 99 ? '99+' : String(count)) : '';
+    b.setAttribute('aria-hidden', 'true');
     b.classList.remove('bump');
     requestAnimationFrame(() => b.classList.add('bump'));
   });
@@ -88,9 +104,15 @@ function showToast(msg) {
 
 // === CART DRAWER ===
 function toggleCart(open) {
-  document.querySelector('.cart-overlay')?.classList.toggle('open', open);
-  document.querySelector('.cart-drawer')?.classList.toggle('open', open);
-  if (open) renderCartItems();
+  const drawer = document.querySelector('.cart-drawer');
+  const overlay = document.querySelector('.cart-overlay');
+  drawer?.classList.toggle('open', open); overlay?.classList.toggle('open', open);
+  drawer?.setAttribute('aria-hidden', String(!open));
+  drawer?.toggleAttribute('inert', !open);
+  document.querySelectorAll('#app > *:not(.cart-drawer):not(.cart-overlay)').forEach((element) => element.toggleAttribute('inert', open));
+  document.querySelector('#cartToggle')?.setAttribute('aria-expanded', String(open));
+  if (open) { renderCartItems(); document.querySelector('#cartClose')?.focus(); }
+  else document.querySelector('#cartToggle')?.focus();
 }
 function renderCartItems() {
   const el = document.querySelector('.cart-items');
@@ -105,255 +127,229 @@ function renderCartItems() {
   if (ft) ft.style.display = '';
   el.innerHTML = resolvedItems.map((item, i) => {
     const variantKey = item.variantName || '';
-    return `<div class="cart-item" style="animation-delay:${i*0.05}s"><div class="cart-item-icon" style="background:${item.color}15">${brandIcons[item.icon]||''}</div><div class="cart-item-info"><div class="cart-item-name">${item.displayName}</div><div class="cart-item-cat">${item.cat}</div></div>
-    <div class="cart-qty-ctrl"><button class="cart-qty-btn ripple-btn" data-qty-sub="${item.id}" data-qty-name="${variantKey}">-</button><span class="cart-qty-val">${item.qty||1}</span><button class="cart-qty-btn ripple-btn" data-qty-add="${item.id}" data-qty-name="${variantKey}">+</button></div>
-    <div class="cart-item-price">₹${item.lineTotal.toLocaleString('en-IN')}</div><button class="cart-remove ripple-btn" data-remove-id="${item.id}" data-remove-name="${variantKey}">${trashSvg}</button></div>`;
+    return `<div class="cart-item" style="animation-delay:${i*0.05}s"><div class="cart-item-icon">${brandIcons[item.icon]||''}</div><div class="cart-item-info"><div class="cart-item-name">${sanitizeHTML(item.displayName)}</div><div class="cart-item-cat">${sanitizeHTML(item.cat)}</div></div>
+    <div class="cart-qty-ctrl"><button aria-label="Decrease ${sanitizeHTML(item.displayName)} quantity" class="cart-qty-btn ripple-btn" data-qty-sub="${sanitizeHTML(item.id)}" data-qty-name="${sanitizeHTML(variantKey)}">-</button><span class="cart-qty-val">${item.qty||1}</span><button aria-label="Increase ${sanitizeHTML(item.displayName)} quantity" class="cart-qty-btn ripple-btn" data-qty-add="${sanitizeHTML(item.id)}" data-qty-name="${sanitizeHTML(variantKey)}">+</button></div>
+    <div class="cart-item-price"><span>₹${formatInr(item.lineTotalPaise/100)}</span>${item.lineTotalUsdCents===null?'':`<small>≈ $${(item.lineTotalUsdCents/100).toFixed(2)} USD</small>`}</div><button aria-label="Remove ${sanitizeHTML(item.displayName)}" class="cart-remove ripple-btn" data-remove-id="${sanitizeHTML(item.id)}" data-remove-name="${sanitizeHTML(variantKey)}">${trashSvg}</button></div>`;
   }).join('');
   const totalEl = document.querySelector('.cart-total-amount');
   const countEl = document.querySelector('.cart-header .cart-count');
-  if (totalEl) totalEl.textContent = `₹${getCartTotal().toLocaleString('en-IN')}`;
+  if (totalEl) totalEl.innerHTML = `₹${formatInr(getCartTotal())}${getCartTotalUsdCents()===null?'':`<small>≈ $${(getCartTotalUsdCents()/100).toFixed(2)} USD (approx.)</small>`}`;
   if (countEl) countEl.textContent = `(${resolvedItems.reduce((sum, item) => sum + (item.qty || 1), 0)})`;
 }
 
-const marqueeKeys = ['chatgpt','perplexity','gemini','envato','windsurf','microsoft'];
-const marqueeNames = ['ChatGPT','Perplexity','Gemini','Envato','Windsurf','Microsoft'];
-function getIcon(k) { return brandIcons[k] || ''; }
-function marqueeItems() {
-  const items = marqueeKeys.map((k,i) => `<div class="marquee-item"><div class="marquee-icon liquid-glass">${getIcon(k)}</div><span class="marquee-name">${marqueeNames[i]}</span></div>`);
-  return [...items,...items].join('');
+function getIcon(k) { return brandIcons[k] || '<span class="brand-monogram" aria-hidden="true">SB</span>'; }
+function marqueeItems() { const items = featuredProductFamilies(productFamilies, 18).slice(0, 6); return [...items, ...items].map((family) => `<div class="marquee-item"><div class="marquee-icon liquid-glass">${getIcon(family.icon)}</div><span class="marquee-name">${sanitizeHTML(family.name)}</span></div>`).join(''); }
+function familyCards() {
+  const families = featuredProductFamilies(productFamilies, 18);
+  if (!families.length) return '<p>No featured supplier families are available.</p>';
+  return families.map((family, index) => {
+    const price = family.startingPricePaise === null ? 'Price unavailable' : `From ₹${formatInr(family.startingPricePaise / 100)}`;
+    const stock = family.availableOffers ? `${family.availableOffers} available offer${family.availableOffers === 1 ? '' : 's'}` : 'Currently out of stock';
+    return `<a class="family-card fade-up fade-up-delay-${index % 4 + 1}" href="/collection/${encodeURIComponent(family.slug)}" data-route><span class="family-icon">${getIcon(family.icon)}</span><span class="family-name">${sanitizeHTML(family.name)}</span><span class="family-meta">${sanitizeHTML(stock)}</span><span class="family-price">${sanitizeHTML(price)}</span></a>`;
+  }).join('');
 }
-function productCards(filter, searchQuery = '') {
-  let list = filter === 'All' ? products : products.filter(p => p.cat === filter);
+function familyPage(slug) {
+  const family = findProductFamily(productFamilies, slug);
+  if (!family) return `${navbar()}<main id="main-content"><section class="section-inner family-page"><h1>Product family not found</h1><a href="/products" data-route>Browse all supplier offers</a></section></main>${footer()}${cartDrawer()}`;
+  const offers = family.products.map((product) => {
+    const variants = Array.isArray(product.variants) ? product.variants.filter((variant) => !variant.disabled) : [];
+    const hasVariants = Array.isArray(product.variants) && product.variants.length > 0;
+    const pricePaise = variants.length ? Math.min(...variants.map((variant) => variant.priceInrPaise)) : product.priceInrPaise;
+    const priceUsd = variants.length ? Math.min(...variants.map((variant) => variant.priceUsd)) : product.priceUsd;
+    const stockText = hasVariants ? `${variants.length} available option${variants.length === 1 ? '' : 's'}` : product.unlimited ? 'Unlimited stock' : product.inStock ? `${product.stock} in stock` : 'Out of stock';
+    return `<article class="family-offer"><div><h2>${sanitizeHTML(product.name)}</h2><p>${sanitizeHTML(product.cat)} · ${sanitizeHTML(stockText)}</p>${product.duration ? `<p>${sanitizeHTML(product.duration)}</p>` : ''}</div><div class="family-offer-price"><strong>${variants.length ? 'From ' : ''}₹${formatInr(pricePaise / 100)}</strong>${Number.isFinite(Number(priceUsd)) ? `<small>≈ $${Number(priceUsd).toFixed(2)} USD (approx.)</small>` : ''}</div><a class="btn-buy ripple-btn" href="/product/${encodeURIComponent(product.id)}" data-route>${hasVariants ? 'Choose option' : 'View offer'}</a></article>`;
+  }).join('');
+  return `${navbar()}<main id="main-content"><section class="section-inner family-page"><a class="detail-back" href="/products" data-route>${backSvg} All supplier offers</a><h1>${sanitizeHTML(family.name)}</h1><p>Supplier listings, prices, and stock.</p><div class="family-offers">${offers}</div></section></main>${footer()}${cartDrawer()}`;
+}
+function productsPage() {
+  return `${navbar()}<main id="main-content"><section class="section products-page"><div class="section-inner"><a class="detail-back" href="/" data-route>${backSvg} Featured families</a><h1 class="section-title">All supplier offers</h1><p id="catalogueStatus" role="status" aria-live="polite">Loading supplier inventory…</p><p class="catalogue-ranking-note">Featured order is curated, not popularity data.</p><div class="search-container"><input type="search" id="searchInput" class="search-input" aria-label="Search supplier offers" placeholder="Search supplier offers" autocomplete="off"/></div><div class="catalogue-controls" aria-label="Catalogue filters"><label>Availability <select id="availabilityFilter"><option value="all">All offers</option><option value="available">In stock</option></select></label><label>Sort <select id="sortFilter"><option value="featured">Featured (curated)</option><option value="name">Name A–Z</option><option value="price-low">Price: low to high</option><option value="price-high">Price: high to low</option></select></label></div><div class="category-chips" id="categoryChips">${chipHTML()}</div><div class="products-grid" id="productsGrid">${productCards('All')}</div></div></section></main>${footer()}${cartDrawer()}`;
+}
+function productCards(filter, searchQuery = '', availability = 'all', sort = 'featured', limit = Infinity) {
+  let list = filter === 'All' ? products : products.filter(p => p.cat.toLocaleLowerCase() === filter.toLocaleLowerCase());
+  if(availability==='available')list=list.filter((product)=>product.inStock);
   if (searchQuery) {
     const q = searchQuery.toLowerCase();
     list = list.filter(p => p.name.toLowerCase().includes(q) || (p.desc && p.desc.toLowerCase().includes(q)) || p.cat.toLowerCase().includes(q));
   }
+  if(sort==='featured')list=editorialProductOrder(list);
+  if(sort==='name')list=[...list].sort((a,b)=>a.name.localeCompare(b.name,'en-US')||String(a.id).localeCompare(String(b.id),'en-US'));
+  if(sort==='price-low')list=[...list].sort((a,b)=>a.priceNum-b.priceNum||a.name.localeCompare(b.name,'en-US')||String(a.id).localeCompare(String(b.id),'en-US'));
+  if(sort==='price-high')list=[...list].sort((a,b)=>b.priceNum-a.priceNum||a.name.localeCompare(b.name,'en-US')||String(a.id).localeCompare(String(b.id),'en-US'));
+  list=list.slice(0,limit);
   
   if (list.length === 0) {
-    return `<div style="grid-column:1/-1;text-align:center;padding:40px;color:hsla(var(--foreground)/.5);">No products found matching your search.</div>`;
+    return `<div style="grid-column:1/-1;text-align:center;padding:40px;color:hsla(var(--foreground)/.5);">${searchQuery ? 'No products match your search.' : 'No supplier products are currently available.'}</div>`;
   }
 
   return list.map((p,i) => {
     const activeVariants = p.variants ? p.variants.filter(v => !v.disabled) : null;
-    const defaultPrice = activeVariants && activeVariants.length > 0 ? activeVariants[0].price : p.price;
-    const hasVariants = activeVariants && activeVariants.length > 0;
-    return `<div class="product-card fade-up fade-up-delay-${i%4+1}" data-id="${p.id}">
-    <div class="product-img" style="background:linear-gradient(135deg,${p.color}15,${p.color}08)"><div class="brand-svg">${getIcon(p.icon)}</div>${p.tag?`<span class="product-tag">${p.tag}</span>`:''}</div>
-    <div class="product-body"><div class="product-name">${p.name}</div><div class="product-cat">${p.cat}</div>
-    <div class="product-pricing"><span class="product-price">${defaultPrice}</span>${p.mrp ? `<span class="product-mrp">${p.mrp}</span><span class="product-discount">${p.discount} OFF</span>` : ''}</div>
-    <button class="btn-buy ripple-btn" data-add="${p.id}">${cartSvg} ${hasVariants?'Select Options':'Add to Cart'}</button></div></div>`;
+    const selectedVariant = activeVariants && activeVariants.length > 0 ? [...activeVariants].sort((a, b) => a.priceInrPaise - b.priceInrPaise)[0] : null;
+    const defaultPrice = selectedVariant?.price ?? p.price;
+    const defaultUsd = selectedVariant?.priceUsd ?? p.priceUsd;
+    const hasVariants = Array.isArray(p.variants) && p.variants.length > 0;
+    return `<div class="product-card fade-up fade-up-delay-${i%4+1}" data-id="${sanitizeHTML(p.id)}">
+    <div class="product-img">${p.image?`<img class="product-photo" src="${sanitizeHTML(p.image)}" alt="${sanitizeHTML(p.name)}" loading="lazy" referrerpolicy="no-referrer"/>`:''}<div class="brand-svg">${getIcon(p.icon)}</div></div>
+    <div class="product-body"><a class="product-name" href="/product/${encodeURIComponent(p.id)}" data-route>${sanitizeHTML(p.name)}</a><div class="product-cat">${sanitizeHTML(p.cat)}</div>
+    <div class="product-pricing"><span class="product-price">${hasVariants ? 'From ' : ''}${sanitizeHTML(defaultPrice)} INR</span>${Number.isFinite(Number(defaultUsd)) ? `<span class="product-usd">≈ $${Number(defaultUsd).toFixed(2)} USD (approx.)</span>` : ''}</div>
+    ${Array.isArray(p.variants)&&p.variants.length>0 ? `<div class="product-cat">${activeVariants.length?'Choose an available option':'No options currently available'}</div>` : p.unlimited ? '<div class="product-cat">Unlimited stock</div>' : Number.isInteger(p.stock) ? `<div class="product-cat">${p.stock === 0 ? 'Out of stock' : p.stock <= 3 ? `Only ${p.stock} available` : `${p.stock} available`}</div>` : ''}
+    ${p.requiresEmail ? '<div class="product-cat">Email required for delivery</div>' : ''}
+    <button class="btn-buy ripple-btn" data-add="${sanitizeHTML(p.id)}" ${!p.inStock ? 'disabled' : ''}>${cartSvg} ${hasVariants?'Select Options':'Add to Cart'}</button></div></div>`;
   }).join('');
 }
-function chipHTML() { return categories.map(c => `<button class="chip ripple-btn ${c==='All'?'active':''}" data-cat="${c}">${c}</button>`).join(''); }
+function chipHTML() { return categories.map(c => `<button class="chip ripple-btn ${c==='All'?'active':''}" data-cat="${sanitizeHTML(c)}">${sanitizeHTML(c)}</button>`).join(''); }
 
 function navbar() {
   return `<nav class="navbar" id="navbar">
     <a href="/" class="nav-logo" data-home><img src="${logoUrl}" alt="SoftBazzar"/></a>
+    <button class="mobile-menu-toggle" type="button" aria-expanded="false" aria-controls="mobileNav" aria-label="Open navigation menu">☰</button>
     <div class="nav-center">
       <button class="nav-item" data-scroll="products">Products ${chevronSvg}</button>
       <button class="nav-item" data-scroll="how-it-works">How It Works</button>
       <button class="nav-item" data-scroll="stats">Why Us</button>
-      <a class="nav-item" href="${TELEGRAM}" target="_blank">Contact</a>
+      <a class="nav-item" href="${TELEGRAM}" target="_blank" rel="noopener noreferrer">Contact</a>
     </div>
+    <div class="mobile-nav" id="mobileNav" hidden><button data-scroll="products">Products</button><a href="/products" data-route>All offers</a><a href="${TELEGRAM}" target="_blank" rel="noopener noreferrer">Support @softbazzar</a><a href="/privacy" data-route>Privacy</a><a href="/terms" data-route>Terms</a></div>
     <div class="nav-right" style="display:flex;gap:10px;align-items:center;">
-      <button class="btn-signup cart-btn ripple-btn" id="cartToggle">${cartSvg} Cart <span class="cart-badge">${cart.length||''}</span></button>
-      <a class="btn-signup ripple-btn" href="${TELEGRAM}" target="_blank">${telegramSvg} Support</a>
+      <button class="btn-signup cart-btn ripple-btn" id="cartToggle" aria-controls="cartDrawer" aria-expanded="false">${cartSvg} Cart <span class="cart-badge">${cart.reduce((total,item)=>total+item.qty,0)||''}</span></button>
+      <a class="btn-signup ripple-btn" href="${TELEGRAM}" target="_blank" rel="noopener noreferrer">${telegramSvg} Support</a>
     </div>
   </nav><div class="nav-divider"></div>`;
 }
 
 function cartDrawer() {
   return `<div class="cart-overlay" id="cartOverlay"></div>
-  <div class="cart-drawer" id="cartDrawer">
-    <div class="cart-header"><h2>Your Cart <span class="cart-count">(${cart.length})</span></h2><button class="cart-close ripple-btn" id="cartClose">${closeSvg}</button></div>
+  <div class="cart-drawer" id="cartDrawer" role="dialog" aria-modal="true" aria-label="Shopping cart" aria-hidden="true" inert>
+    <div class="cart-header"><h2>Your Cart <span class="cart-count">(${cart.reduce((total,item)=>total+item.qty,0)})</span></h2><button aria-label="Close cart" class="cart-close ripple-btn" id="cartClose">${closeSvg}</button></div>
     <div class="cart-items"></div>
-    <div class="cart-footer"><div class="cart-total"><span class="cart-total-label">Total</span><span class="cart-total-amount">₹${getCartTotal()}</span></div>
+    <div class="cart-footer"><div class="cart-total"><span class="cart-total-label">Total</span><span class="cart-total-amount">₹${formatInr(getCartTotal())}${getCartTotalUsdCents()===null?'':`<small>≈ $${(getCartTotalUsdCents()/100).toFixed(2)} USD (approx.)</small>`}</span></div>
     <a href="/checkout" data-route class="cart-checkout ripple-btn">${telegramSvg} Proceed to Checkout</a>
-    <p class="cart-telegram-note">Secure payment via UPI or Crypto</p></div>
+    <p class="cart-telegram-note">Quote only. No payment is collected.</p></div>
   </div>`;
 }
 
 function footer() {
   return `<footer class="footer"><div class="footer-inner">
-    <div class="footer-brand"><img src="${logoUrl}" alt="SoftBazzar" style="height:28px;"/><p>Your one-stop shop for premium software licenses, OTT subscriptions, and digital tools at the most affordable prices. Instant delivery guaranteed.</p>
+    <div class="footer-brand"><img src="${logoUrl}" alt="SoftBazzar" style="height:28px;"/><p>Browse supplier products and current availability.</p>
     <div class="footer-contact">
-      <a href="${TELEGRAM}" target="_blank"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg> t.me/softbazzar</a>
-      <a href="mailto:support@softbazzar.com"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M22 4l-10 8L2 4"/></svg> support@softbazzar.com</a>
+      <a href="${TELEGRAM}" target="_blank" rel="noopener noreferrer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg> t.me/softbazzar</a>
     </div></div>
-    <div class="footer-col"><h4>Categories</h4><ul>
-      <li><a href="#" data-filter="AI Tools">AI Tools</a></li><li><a href="#" data-filter="Developer Tools">Developer Tools</a></li>
-      <li><a href="#" data-filter="Design Resources">Design Resources</a></li><li><a href="#" data-filter="Social Media Growth">Social Media Growth</a></li>
-    </ul></div>
-    <div class="footer-col"><h4>Popular</h4><ul>
-      <li><a href="/product/chatgpt-plus" data-route>ChatGPT Plus</a></li><li><a href="/product/perplexity-pro" data-route>Perplexity Pro</a></li>
-      <li><a href="/product/canva-pro" data-route>Canva Pro</a></li><li><a href="/product/envato" data-route>Envato Elements</a></li>
-      <li><a href="/product/reels-views" data-route>1M Reels Views</a></li>
-    </ul></div>
+    <div class="footer-col"><h4>Categories</h4><p>Browse categories from current inventory.</p></div>
+    <div class="footer-col"><h4>Catalogue</h4><p>See current supplier listings above.</p></div>
     <div class="footer-col"><h4>Legal</h4><ul>
       <li><a href="/privacy" data-route>Privacy Policy</a></li><li><a href="/terms" data-route>Terms & Conditions</a></li>
-      <li><a href="${TELEGRAM}" target="_blank">Refund Policy</a></li><li><a href="${TELEGRAM}" target="_blank">Report an Issue</a></li>
+      <li><a href="/terms" data-route>Refund Policy</a></li><li><a href="${TELEGRAM}" target="_blank" rel="noopener noreferrer">Report an Issue</a></li>
     </ul></div>
     <div class="footer-col"><h4>Support</h4><ul>
-      <li><a href="${TELEGRAM}" target="_blank">💬 Live Chat (Telegram)</a></li><li><a href="${TELEGRAM}" target="_blank">📞 24/7 Support</a></li>
+      <li><a href="${TELEGRAM}" target="_blank" rel="noopener noreferrer">💬 Contact support</a></li>
       <li><a href="#" data-scroll="how-it-works">❓ How It Works</a></li><li><a href="#" data-scroll="products">🛒 Browse Products</a></li>
     </ul></div>
   </div>
   <div class="footer-bottom"><p>&copy; 2026 SoftBazzar. All rights reserved.</p>
-    <div class="footer-payment"><span>We accept</span><div class="pay-icon">UPI</div><div class="pay-icon">VISA</div><div class="pay-icon">MC</div><div class="pay-icon">GPay</div></div>
+    <div class="footer-payment"><span>Checkout currently paused</span></div>
     <div class="footer-socials">
-      <a href="${TELEGRAM}" target="_blank" aria-label="Telegram">${telegramSvg}</a>
-      <a href="#" aria-label="Instagram"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"/><path d="M16 11.37A4 4 0 1112.63 8 4 4 0 0116 11.37z"/><line x1="17.5" y1="6.5" x2="17.51" y2="6.5"/></svg></a>
-      <a href="#" aria-label="Twitter"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 4s-.7 2.1-2 3.4c1.6 10-9.4 17.3-18 11.6 2.2.1 4.4-.6 6-2C3 15.5.5 9.6 3 5c2.2 2.6 5.6 4.1 9 4-.9-4.2 4-6.6 7-3.8 1.1 0 3-1.2 3-1.2z"/></svg></a>
+      <a href="${TELEGRAM}" target="_blank" rel="noopener noreferrer" aria-label="Telegram">${telegramSvg}</a>
     </div>
   </div></footer>`;
 }
 
 function homePage() {
-  return `<div class="hero-wrapper">
+  return `<main id="main-content"><div class="hero-wrapper">
     <video class="bg-video" id="bgVideo" src="${VIDEO_URL}" muted playsinline></video><div class="blur-overlay"></div>
     <div class="content-layer">${navbar()}
       <div class="hero-content"><div class="hero-inner">
         <h1 class="hero-headline">Soft<span class="gradient-text">Bazzar</span></h1>
-        <p class="hero-subtitle">Premium software, OTT subscriptions &amp; digital tools<br/>at unbeatable prices. Instant delivery.</p>
+        <p class="hero-subtitle">Browse digital products and current availability<br/>from our reseller catalogue.</p>
         <button class="btn-cta ripple-btn magnetic-btn" data-scroll="products"><span>Browse Products</span></button>
       </div></div>
-      <div class="marquee-section"><div class="marquee-container"><div class="marquee-label">Trusted brands<br/>we deliver</div><div class="marquee-track-wrapper"><div class="marquee-track">${marqueeItems()}</div></div></div></div>
+      <div class="marquee-section"><div class="marquee-container"><div class="marquee-label">Featured<br/>families</div><div class="marquee-track-wrapper"><div class="marquee-track">${marqueeItems()}</div></div></div></div>
     </div></div>
   <section class="section" id="products"><div class="section-inner">
     <div class="section-badge fade-up"><span class="dot"></span> Products</div>
-    <h2 class="section-title fade-up">Browse our collection</h2>
-    <p class="section-subtitle fade-up" style="margin-bottom: 24px;">Curated subscriptions &amp; productivity plans at prices you won't find anywhere else.</p>
-    
-    <div class="search-container fade-up">
-      <input type="text" id="searchInput" class="search-input" placeholder="Search for AI tools, Netflix, Instagram followers..." autocomplete="off"/>
-    </div>
-
-    <div class="category-chips fade-up" id="categoryChips">${chipHTML()}</div>
-    <div class="products-grid" id="productsGrid">${productCards('All')}</div>
+    <h2 class="section-title fade-up">Browse product families</h2>
+    <p class="section-subtitle fade-up" style="margin-bottom: 24px;">Featured order is curated, not popularity data.</p>
+    <p id="catalogueStatus" role="status" aria-live="polite">Loading supplier inventory…</p>
+    <div class="family-grid" id="familyGrid">${familyCards()}</div>
+    <a class="all-offers-link" href="/products" data-route>Browse all supplier offers</a>
   </div></section>
   <section class="section" id="how-it-works"><div class="section-inner" style="text-align:center;">
     <div class="section-badge fade-up" style="margin:0 auto 24px;"><span class="dot"></span> How It Works</div>
-    <h2 class="section-title fade-up">Get started in 3 steps</h2>
+    <h2 class="section-title fade-up">Browse with current details</h2>
     <div class="steps-row">
-      <div class="step-card fade-up"><h3 class="step-title">Choose your product</h3><p class="step-desc">Browse our catalog of premium software and subscriptions. Pick what you need.</p></div>
-      <div class="step-card fade-up fade-up-delay-1"><h3 class="step-title">Make payment</h3><p class="step-desc">Pay securely via UPI, card, or wallet. All transactions are encrypted and safe.</p></div>
-      <div class="step-card fade-up fade-up-delay-2"><h3 class="step-title">Instant delivery</h3><p class="step-desc">Receive your credentials or activation link instantly via email. Start using right away.</p></div>
+      <div class="step-card fade-up"><h3 class="step-title">Browse supplier listings</h3><p class="step-desc">See product information and current supplier stock.</p></div>
+      <div class="step-card fade-up fade-up-delay-1"><h3 class="step-title">Review current prices</h3><p class="step-desc">INR is primary. USD amounts are approximate.</p></div>
+      <div class="step-card fade-up fade-up-delay-2"><h3 class="step-title">Checkout is paused</h3><p class="step-desc">Orders open after payment and delivery services pass review.</p></div>
     </div></div></section>
   <section class="section" id="stats"><div class="section-inner" style="text-align:center;">
-    <div class="section-badge fade-up" style="margin:0 auto 24px;"><span class="dot"></span> Trusted</div>
-    <h2 class="section-title fade-up">Why customers love us</h2>
-    <div class="stats-row">
-      <div class="stat-item fade-up float-anim"><div class="stat-number">50K+</div><div class="stat-label">Happy Customers</div></div>
-      <div class="stat-item fade-up float-anim" style="animation-delay:.5s"><div class="stat-number">200+</div><div class="stat-label">Products Available</div></div>
-      <div class="stat-item fade-up float-anim" style="animation-delay:1s"><div class="stat-number">99%</div><div class="stat-label">Uptime Guarantee</div></div>
-      <div class="stat-item fade-up float-anim" style="animation-delay:1.5s"><div class="stat-number">24/7</div><div class="stat-label">Customer Support</div></div>
-    </div></div></section>
+    <div class="section-badge fade-up" style="margin:0 auto 24px;"><span class="dot"></span> Inventory</div>
+    <h2 class="section-title fade-up">Clear product information</h2>
+    <p class="section-subtitle fade-up">Prices, duration and stock come from validated supplier data.</p>
+  </div></section>
   <section class="cta-section"><div class="blur-bg"></div>
-    <h2 class="cta-title fade-up">Ready to save big<br/>on premium software?</h2>
-    <p class="cta-subtitle fade-up">Join 50,000+ customers already saving on their favorite subscriptions.</p>
+    <h2 class="cta-title fade-up">Browse current<br/>supplier products</h2>
+    <p class="cta-subtitle fade-up">See products and availability from supplier data.</p>
     <button class="btn-cta ripple-btn fade-up" style="position:relative;z-index:1;" data-scroll="products"><span>Browse Products</span></button>
-  </section>${footer()}${cartDrawer()}`;
+  </section></main>${footer()}${cartDrawer()}`;
+}
+
+function adminPage() {
+  return `${navbar()}<main id="main-content"><section class="admin-page"><div class="admin-header"><div><h1>Store operations</h1><p>Private staging diagnostics and controls.</p></div></div><div class="admin-content">
+    <form id="adminLogin" class="admin-card"><label for="adminTokenInput">Admin token</label><div class="admin-auth-row"><input id="adminTokenInput" class="admin-input" type="password" autocomplete="current-password" required/><button class="btn-buy" type="submit">Connect securely</button></div><p id="adminMessage" role="status">Token stays in page memory.</p></form>
+    <div id="adminDashboard" hidden><div class="admin-card"><h2>Staging health</h2><div id="adminOverview" aria-live="polite">Connect to load diagnostics.</div></div>
+    <div class="admin-card"><h2>Merchant pricing policy</h2><p>1 USDT ≈ 1 USD. Selling prices add 25%, then convert at this rate.</p><form id="pricingForm" class="admin-auth-row"><label>INR per USD <input id="pricingUsdInr" class="admin-input" inputmode="decimal" required/></label><label>Reason for authorized change <input id="pricingReason" class="admin-input" maxlength="300" minlength="5" required/></label><button class="btn-buy" type="submit">Save pricing rate</button></form><div id="pricingAudit" aria-live="polite"></div></div>
+    <div class="admin-card"><h2>Recent supplier syncs</h2><div id="adminSyncRuns"></div><button id="syncNow" class="btn-buy" type="button">Run read-only sync</button></div>
+    <div class="admin-card"><h2>Recent orders</h2><div id="adminOrders"></div><p>Payment and purchasing remain disabled.</p></div></div>
+  </div></section></main>${footer()}`;
 }
 
 function detailPage(id) {
   const p = products.find(x => x.id === id);
-  if (!p) return `${navbar()}<div class="detail-page page-transition" style="padding:200px 32px;text-align:center;"><h2>Product not found</h2><br/><button class="btn-cta ripple-btn" data-home><span>Back to Home</span></button></div>${footer()}${cartDrawer()}`;
+  if (!p) return `${navbar()}<main id="main-content"><div class="detail-page page-transition" style="padding:200px 32px;text-align:center;"><h2>Product not found</h2><br/><button class="btn-cta ripple-btn" data-home><span>Back to Home</span></button></div></main>${footer()}${cartDrawer()}`;
   
-  const activeVariants = p.variants ? p.variants.filter(v => !v.disabled) : null;
+  const hasVariants = Array.isArray(p.variants) && p.variants.length > 0;
+  const activeVariants = hasVariants ? p.variants.filter(v => !v.disabled) : null;
   let variantHtml = '';
   if (activeVariants && activeVariants.length > 0) {
     variantHtml = `<div class="product-variants fade-up fade-up-delay-2" id="variantSelector">` + 
-      activeVariants.map((v, i) => `<button class="variant-chip ripple-btn ${i===0?'active':''}" data-vprice="${v.price}" data-vpricenum="${v.priceNum}" data-vname="${v.name}">${v.name}</button>`).join('') + 
+      activeVariants.map((v) => `<button class="variant-chip ripple-btn" aria-pressed="false" data-vprice="${sanitizeHTML(v.price)}" data-vpricenum="${v.priceNum}" data-vusd="${v.priceUsd}" data-vname="${sanitizeHTML(v.name)}">${sanitizeHTML(v.name)} · ${sanitizeHTML(v.price)}</button>`).join('') +
     `</div>`;
   }
 
-  const defaultPrice = activeVariants && activeVariants.length > 0 ? activeVariants[0].price : p.price;
-  const defaultPriceNum = activeVariants && activeVariants.length > 0 ? activeVariants[0].priceNum : p.priceNum;
-  const defaultName = activeVariants && activeVariants.length > 0 ? activeVariants[0].name : p.name;
+  const defaultPrice = hasVariants ? 'Choose an option' : p.price;
+  const defaultPriceNum = hasVariants ? '' : p.priceNum;
+  const defaultUsd = hasVariants ? null : p.priceUsd;
+  const defaultName = hasVariants ? '' : p.name;
+  const relatedProducts=products.filter((product)=>product.id!==p.id&&product.cat===p.cat&&product.inStock).slice(0,3);
   
-  return `${navbar()}
+  return `${navbar()}<main id="main-content">
   <div class="detail-page page-transition"><div class="section-inner" style="max-width:1100px;margin:0 auto;padding:0 32px 80px;">
     <button class="detail-back ripple-btn" data-home>${backSvg} Back to products</button>
     <div class="detail-grid">
       <div class="detail-img-wrap" style="background:linear-gradient(135deg,${p.color}12,${p.color}05)">
         <div class="detail-glow" style="background:${p.color};top:50%;left:50%;"></div>
-        <div class="brand-svg">${getIcon(p.icon)}</div></div>
+        ${p.image?`<img class="detail-photo" src="${sanitizeHTML(p.image)}" alt="${sanitizeHTML(p.name)}" loading="lazy" referrerpolicy="no-referrer"/>`:''}<div class="brand-svg">${getIcon(p.icon)}</div></div>
       <div class="detail-info">
-        <h1 class="fade-up">${p.name}</h1><div class="detail-category fade-up fade-up-delay-1">${p.cat}</div>
+        <h1 class="fade-up">${sanitizeHTML(p.name)}</h1><div class="detail-category fade-up fade-up-delay-1">${sanitizeHTML(p.cat)}</div>
         ${variantHtml}
         <div class="detail-price-row fade-up fade-up-delay-2">
-          <span class="detail-current" id="detailCurrentPrice">${defaultPrice}</span>
-          ${p.mrp ? `<span class="detail-original">${p.mrp}</span><span class="detail-save">${p.discount} OFF</span>` : ''}
+          <span class="detail-current" id="detailCurrentPrice">${sanitizeHTML(defaultPrice)}</span>
+          <span class="detail-category" id="detailUsdPrice">${hasVariants ? 'Select an available option to view price' : `≈ $${Number(defaultUsd).toFixed(2)} USD (approx.)`}</span>
         </div>
-        <p class="detail-desc fade-up fade-up-delay-3">${p.desc}</p>
-        <div class="detail-features fade-up fade-up-delay-4"><h3>What's included</h3><ul>${p.features.map(f=>`<li>${checkSvg} ${f}</li>`).join('')}</ul></div>
-        <button class="detail-buy-btn ripple-btn fade-up fade-up-delay-4" data-detail-add="${p.id}" data-vname="${defaultName}" data-vprice="${defaultPrice}" data-vpricenum="${defaultPriceNum}" id="detailBuyBtn"><span>${cartSvg} Add to Cart — ${defaultPrice}</span></button>
-        <a href="${TELEGRAM}" target="_blank" class="detail-buy-btn ripple-btn fade-up fade-up-delay-4" style="margin-top:12px;background:linear-gradient(135deg,#229ED9,#1b75bc);text-decoration:none"><span>${telegramSvg} Buy Now on Telegram</span></a>
-        <p class="detail-contact fade-up fade-up-delay-4">Need help? Chat with us on <a href="${TELEGRAM}" target="_blank">Telegram @softbazzar</a></p>
-      </div></div></div></div>${footer()}${cartDrawer()}`;
+        <p class="product-source-label">Supplier-provided description</p><p class="detail-desc fade-up fade-up-delay-3">${sanitizeHTML(p.desc)}</p>
+        <div class="detail-features fade-up fade-up-delay-4"><h3>Product information</h3><ul>${p.features.map(f=>`<li>${checkSvg} ${sanitizeHTML(f)}</li>`).join('')}</ul></div>
+        <button class="detail-buy-btn ripple-btn fade-up fade-up-delay-4" data-detail-add="${sanitizeHTML(p.id)}" data-vname="${sanitizeHTML(defaultName)}" data-vprice="${sanitizeHTML(defaultPrice)}" data-vpricenum="${defaultPriceNum}" id="detailBuyBtn" ${p.inStock && !hasVariants ? '' : 'disabled'}><span>${cartSvg} ${!p.inStock ? 'Unavailable' : hasVariants ? 'Select an option first' : `Add to Cart — ${sanitizeHTML(defaultPrice)}`}</span></button>
+        <p class="detail-contact fade-up fade-up-delay-4">Need help? Chat with us on <a href="${TELEGRAM}" target="_blank" rel="noopener noreferrer">Telegram @softbazzar</a></p>
+      </div></div></div></div>${relatedProducts.length?`<section class="section"><div class="section-inner"><h2 class="section-title">More in ${sanitizeHTML(p.cat)}</h2><div class="products-grid">${productCards(p.cat,'','available','name',3)}</div></div></section>`:''}</main>${footer()}${cartDrawer()}`;
 }
 
 function checkoutPage() {
-  if (cart.length === 0) {
-    return `<div class="checkout-page page-transition"><div class="section-inner" style="max-width:700px;margin:0 auto;padding:100px 32px;text-align:center;">
-      <h2 style="font-family:var(--font-headline);font-size:32px;margin-bottom:16px;">Your cart is empty</h2>
-      <p style="color:hsl(var(--hero-sub));margin-bottom:32px;">Add some products before checking out.</p>
-      <button class="btn-cta ripple-btn" data-home><span>Browse Products</span></button>
-    </div></div>`;
-  }
-  const itemsHtml = resolveCartItems(cart).map(item => {
-    return `<div class="co-item"><div class="co-item-icon" style="background:${item.color}15">${brandIcons[item.icon]||''}</div>
-      <div class="co-item-info"><span class="co-item-name">${item.productName}</span><span class="co-item-variant">${item.displayName}</span><span class="co-item-qty">Qty: ${item.qty||1}</span></div>
-      <span class="co-item-price">₹${item.lineTotal.toLocaleString('en-IN')}</span></div>`;
-  }).join('');
-
-  const orderLines = cart.map(item => {
-    const p = products.find(x => x.id === item.id);
-    return `- ${p ? p.name : item.vName} (${item.vName}) x${item.qty||1} — ₹${(item.vPriceNum * (item.qty||1)).toLocaleString('en-IN')}`;
-  }).join('%0A');
-
-  const hasCert = cart.some(item => item.id === 'infosys' || item.id === 'jpmorgan');
-  let certHtml = '';
-  if (hasCert) {
-    certHtml = `<div class="co-card" style="margin-top:20px;"><h3>🎓 Certificate Details</h3>
-      <p class="co-hint">Please provide details for your certification.</p>
-      <input type="text" id="coCertName" class="co-input" placeholder="Full Name" style="margin-bottom:12px;" required />
-      <div style="display:flex;gap:12px;margin-bottom:12px;">
-        <input type="text" id="coCertGender" class="co-input" placeholder="Gender" required />
-        <input type="number" id="coCertAge" class="co-input" placeholder="Age" required />
-      </div>
-      <input type="text" id="coCertAddress" class="co-input" placeholder="Address" required />
-    </div>`;
-  }
-
-  return `<div class="checkout-page page-transition"><div class="section-inner" style="max-width:900px;margin:0 auto;padding:100px 32px 80px;">
-    <button class="detail-back ripple-btn" data-home>${backSvg} Back to products</button>
-    <h1 class="co-title">Checkout</h1>
-    <div class="co-grid">
-      <div class="co-left">
-        <div class="co-card"><h3>📦 Order Summary</h3><div class="co-items">${itemsHtml}</div>
-          <div class="co-total-row"><span>Total</span><span class="co-total">₹${getCartTotal().toLocaleString('en-IN')}</span></div></div>
-
-        ${certHtml}
-      </div>
-      <div class="co-right">
-        <div class="co-card" style="border: 1px solid rgba(168, 85, 247, 0.3); background: rgba(168, 85, 247, 0.05);">
-          <h3 style="color: #a855f7;">⚠️ PLEASE NOTE</h3>
-          <p style="font-size: 13px; color: hsla(var(--foreground)/.7); line-height: 1.5; margin-top: 8px;">
-            We provide pre-activated premium accounts (shared or private). We do <strong>NOT</strong> upgrade your existing personal email accounts.
-          </p>
-        </div>
-        <div class="co-card co-steps"><h3>📋 How to Complete Your Order</h3>
-          <div class="co-step"><span class="co-step-num">1</span><div><strong>Review Order</strong><p>Verify your cart items.</p></div></div>
-          <div class="co-step"><span class="co-step-num">2</span><div><strong>Send to Telegram</strong><p>Click the button below to send your order details securely.</p></div></div>
-          <div class="co-step"><span class="co-step-num">3</span><div><strong>Complete Payment</strong><p>Our agent will provide payment details and deliver your product within 10 mins - 16 hours.</p></div></div>
-        </div>
-        <button class="detail-buy-btn ripple-btn co-send-btn" id="coSendOrder"><span>${telegramSvg} Send Order on Telegram</span></button>
-      </div>
-    </div>
-  </div></div>`;
+  const items = resolveCartItems(cart);
+  if (!items.length) return '<div class="checkout-page page-transition"><div class="section-inner" style="max-width:700px;margin:0 auto;padding:100px 32px;text-align:center;"><h2>Your cart is empty</h2><p>Add current supplier products first.</p><button class="btn-cta ripple-btn" data-home><span>Browse Products</span></button></div></div>';
+  const rows = items.map((item) => '<div class="co-item"><div class="co-item-info"><span class="co-item-name">' + sanitizeHTML(item.productName) + '</span><span class="co-item-variant">' + sanitizeHTML(item.displayName) + '</span><span class="co-item-qty">Qty: ' + item.qty + '</span></div><span class="co-item-price">₹' + formatInr(item.lineTotalPaise/100) + (item.lineTotalUsdCents===null?'':'<small>≈ $' + (item.lineTotalUsdCents/100).toFixed(2) + ' USD</small>') + '</span></div>').join('');
+  const action=cataloguePurchasable?'<form id="quoteForm"><label for="checkoutEmail">Email for order updates (optional)</label><input id="checkoutEmail" type="email" maxlength="254" autocomplete="email"/><button class="detail-buy-btn ripple-btn co-send-btn" type="submit">Create order quote</button><p>Quote only. No payment is collected.</p></form>':'<h3>Checkout paused</h3><p>Supplier inventory needs a fresh verified update.</p><button class="detail-buy-btn ripple-btn co-send-btn" disabled>Order quotes unavailable</button>';
+  return '<div class="checkout-page page-transition"><div class="section-inner checkout-inner"><a class="detail-back ripple-btn" href="/products" data-route>' + backSvg + ' Back to products</a><h1 class="co-title">Review your quote</h1><div class="co-grid"><section class="co-left co-card" aria-labelledby="order-summary-title"><h2 id="order-summary-title">Order summary</h2><div class="co-items">' + rows + '</div><div class="co-total-row"><span>Estimated total</span><span class="co-total">₹' + formatInr(getCartTotal()) + (getCartTotalUsdCents()===null?'':'<small>≈ $' + (getCartTotalUsdCents()/100).toFixed(2) + ' USD (approx.)</small>') + '</span></div></section><section class="co-right co-card" aria-labelledby="order-details-title"><h2 id="order-details-title">Order details</h2><p class="co-hint">Supplier costs use a fixed merchant conversion policy.</p>' + action + '<p id="quoteMessage" role="status" aria-live="polite"></p></section></div></div></div>';
 }
 
+function orderStatusPage(){return `${navbar()}<main id="main-content"><section class="section-inner" style="max-width:760px;margin:140px auto 80px;padding:0 24px"><h1>Order status</h1><p id="orderStatusMessage" role="status">Loading order details…</p><div id="orderStatusDetails"></div><button class="btn-cta" data-home>Return to store</button></section></main>${footer()}`;}
 // === ROUTER ===
 function navigate(path, replace = false) {
   const target = path || '/';
@@ -362,22 +358,35 @@ function navigate(path, replace = false) {
   render();
 }
 
+function decodeRouteSegment(value) {
+  try { return decodeURIComponent(value); }
+  catch { return null; }
+}
+
 function render() {
   const pathname = window.location.pathname.replace(/\/+$/, '') || '/';
   const app = document.querySelector('#app');
   if (pathname.startsWith('/product/')) {
-    const id = decodeURIComponent(pathname.slice('/product/'.length));
+    const id = decodeRouteSegment(pathname.slice('/product/'.length));
     app.innerHTML = detailPage(id);
   } else if (pathname === '/checkout') {
-    app.innerHTML = `${navbar()}${checkoutPage()}${footer()}${cartDrawer()}`;
+    app.innerHTML = `${navbar()}<main id="main-content">${checkoutPage()}</main>${footer()}${cartDrawer()}`;
+  } else if (pathname === '/products') {
+    app.innerHTML = productsPage();
+  } else if (pathname.startsWith('/collection/')) {
+    app.innerHTML = familyPage(decodeRouteSegment(pathname.slice('/collection/'.length)));
   } else if (pathname === '/privacy') {
-    app.innerHTML = `${navbar()}<div class="section-inner" style="padding-top:100px;"><button class="detail-back ripple-btn" data-home style="margin-bottom:20px;">${backSvg} Back to Store</button>${privacyPage()}</div>${footer()}${cartDrawer()}`;
+    app.innerHTML = `${navbar()}<main id="main-content"><div class="section-inner" style="padding-top:100px;"><button class="detail-back ripple-btn" data-home style="margin-bottom:20px;">${backSvg} Back to Store</button>${privacyPage()}</div></main>${footer()}${cartDrawer()}`;
   } else if (pathname === '/terms') {
-    app.innerHTML = `${navbar()}<div class="section-inner" style="padding-top:100px;"><button class="detail-back ripple-btn" data-home style="margin-bottom:20px;">${backSvg} Back to Store</button>${termsPage()}</div>${footer()}${cartDrawer()}`;
+    app.innerHTML = `${navbar()}<main id="main-content"><div class="section-inner" style="padding-top:100px;"><button class="detail-back ripple-btn" data-home style="margin-bottom:20px;">${backSvg} Back to Store</button>${termsPage()}</div></main>${footer()}${cartDrawer()}`;
   } else if (pathname === '/') {
     app.innerHTML = homePage();
+  } else if (pathname === '/admin') {
+    app.innerHTML = adminPage();
+  } else if (/^\/orders\/[0-9a-f-]{36}$/i.test(pathname)) {
+    app.innerHTML = orderStatusPage();
   } else {
-    app.innerHTML = `${navbar()}<div class="section-inner" style="padding:120px 32px;text-align:center"><h1>Page not found</h1><p>The requested SoftBazzar page is not available.</p><a href="/" data-route>Back to store</a></div>${footer()}${cartDrawer()}`;
+    app.innerHTML = `${navbar()}<main id="main-content"><div class="section-inner" style="padding:120px 32px;text-align:center"><h1>Page not found</h1><p>The requested SoftBazzar page is not available.</p><a href="/" data-route>Back to store</a></div></main>${footer()}${cartDrawer()}`;
   }
   window.scrollTo(0, 0);
   initInteractions();
@@ -405,15 +414,19 @@ function initInteractions() {
   const chipsEl = document.getElementById('categoryChips');
   const gridEl = document.getElementById('productsGrid');
   const searchInput = document.getElementById('searchInput');
+  const availabilityFilter=document.getElementById('availabilityFilter');
+  const sortFilter=document.getElementById('sortFilter');
 
   const updateGrid = () => {
     if (!gridEl) return;
     const activeChip = chipsEl ? chipsEl.querySelector('.chip.active') : null;
     const filter = activeChip ? activeChip.dataset.cat : 'All';
     const query = searchInput ? searchInput.value : '';
+    const availability=availabilityFilter?.value||'all';
+    const sort=sortFilter?.value||'featured';
     gridEl.style.opacity='0'; gridEl.style.transform='translateY(16px)';
     setTimeout(() => {
-      gridEl.innerHTML = productCards(filter, query);
+      gridEl.innerHTML = productCards(filter, query, availability, sort);
       requestAnimationFrame(() => { 
         gridEl.style.transition='opacity .4s,transform .4s'; gridEl.style.opacity='1'; gridEl.style.transform='translateY(0)';
         gridEl.querySelectorAll('.fade-up').forEach(el => observer.observe(el)); 
@@ -437,6 +450,18 @@ function initInteractions() {
       debounceTimer = setTimeout(updateGrid, 300);
     });
   }
+  availabilityFilter?.addEventListener('change',updateGrid);
+  sortFilter?.addEventListener('change',updateGrid);
+  document.querySelector('.mobile-menu-toggle')?.addEventListener('click',(event)=>{const button=event.currentTarget;const menu=document.getElementById('mobileNav');const open=button.getAttribute('aria-expanded')!=='true';button.setAttribute('aria-expanded',String(open));button.setAttribute('aria-label',open?'Close navigation menu':'Open navigation menu');menu.hidden=!open;});
+  document.getElementById('productsGrid')?.addEventListener('error',(event)=>{if(event.target.matches('.product-photo'))event.target.remove();},true);
+  document.querySelector('.detail-img-wrap')?.addEventListener('error',(event)=>{if(event.target.matches('.detail-photo'))event.target.remove();},true);
+
+  const adminLogin=document.getElementById('adminLogin');
+  adminLogin?.addEventListener('submit',async(event)=>{event.preventDefault();const input=document.getElementById('adminTokenInput');adminToken=input.value.trim();input.value='';await loadAdminDashboard();});
+  document.getElementById('pricingForm')?.addEventListener('submit',async(event)=>{event.preventDefault();if(!adminToken)return;const message=document.getElementById('adminMessage');try{const response=await fetch('/api/admin/pricing',{method:'PUT',headers:{Authorization:`Bearer ${adminToken}`,'Content-Type':'application/json'},body:JSON.stringify({usdInr:document.getElementById('pricingUsdInr').value,reason:document.getElementById('pricingReason').value})});const result=await response.json();if(!response.ok)throw new Error(result.error==='change_reason_required'?'Provide a reason of at least five characters.':'Pricing update rejected.');document.getElementById('pricingReason').value='';message.textContent=result.updated?'Pricing rate saved and audited.':'That pricing rate is already active.';await loadAdminDashboard();}catch(error){message.textContent=error.message;}});
+  document.getElementById('syncNow')?.addEventListener('click',async()=>{try{await fetch('/api/admin/sync',{method:'POST',headers:{Authorization:`Bearer ${adminToken}`}});await loadAdminDashboard();}catch{document.getElementById('adminMessage').textContent='Sync request failed.';}});
+  document.getElementById('quoteForm')?.addEventListener('submit',createOrderQuote);
+  const orderMatch=window.location.pathname.match(/^\/orders\/([0-9a-f-]{36})$/i);if(orderMatch)loadOrderStatus(orderMatch[1]);
 
   // Cart drawer
   document.getElementById('cartToggle')?.addEventListener('click', () => toggleCart(true));
@@ -448,6 +473,33 @@ function initInteractions() {
   if (nav) window.addEventListener('scroll', () => nav.classList.toggle('scrolled', window.scrollY > 50), { passive: true });
 
   renderCartItems();
+}
+
+async function createOrderQuote(event){
+  event.preventDefault();const message=document.getElementById('quoteMessage');
+  const items=resolveCartItems(cart).map(item=>({productId:item.id,...(item.variantId?{variantId:item.variantId}:{}),quantity:item.qty}));
+  try{const idempotencyKey=crypto.randomUUID().replaceAll('-','_');const response=await fetch('/api/orders',{method:'POST',headers:{'Content-Type':'application/json','Idempotency-Key':idempotencyKey},body:JSON.stringify({customerEmail:document.getElementById('checkoutEmail').value.trim(),items})});const result=await response.json();if(!response.ok)throw new Error(result.error==='customer_email_required'?'An email is required for this product.':result.error==='quote_rate_limited'?'Too many quote attempts. Try again shortly.':result.error==='quote_expired'?'This quote expired. Review your cart again.':result.error==='quote_not_active'?'This quote is no longer active. Your cart remains saved.':'A current quote could not be created.');if(result.status!=='quoted'||!Number.isFinite(Date.parse(result.expiresAt))||Date.parse(result.expiresAt)<=Date.now())throw new Error('This quote is no longer active. Your cart remains saved.');sessionStorage.setItem(`sb_order_access_${result.orderId}`,idempotencyKey);const usdText=Number.isSafeInteger(result.approxUsdTotalCents)&&result.approxUsdTotalCents>0?` · ≈ $${(result.approxUsdTotalCents/100).toFixed(2)} USD (approx.)`:'';message.innerHTML=`Quote created for ₹${formatInr(result.totalPaise/100)} INR${usdText}. <a href="/orders/${encodeURIComponent(result.orderId)}" data-route>View order status</a>. Payment remains disabled.`;cart=[];saveCart();updateCartBadge();}catch(error){message.textContent=error.message;}
+}
+
+async function loadOrderStatus(orderId){
+  try{const statusToken=sessionStorage.getItem(`sb_order_access_${orderId}`)||'';const response=await fetch(`/api/orders/${encodeURIComponent(orderId)}`,{headers:{Authorization:`Bearer ${statusToken}`}});if(!response.ok)throw new Error('Order not found in this browser session.');const {order}=await response.json();document.getElementById('orderStatusMessage').textContent=`Status: ${order.status}. No payment was collected.`;const usdText=Number.isSafeInteger(order.approxUsdTotalCents)&&order.approxUsdTotalCents>0?`<p>≈ $${(order.approxUsdTotalCents/100).toFixed(2)} USD (approx., at ₹${sanitizeHTML(order.merchantUsdInr)} per USD)</p>`:'';document.getElementById('orderStatusDetails').innerHTML=`<p>Order ${sanitizeHTML(order.id)}</p><p>Total ₹${formatInr(order.totalPaise/100)} INR</p>${usdText}<ul>${order.items.map(item=>`<li>${sanitizeHTML(item.name)} · ${item.quantity} × ₹${formatInr(item.unitPricePaise/100)}${Number.isSafeInteger(item.approxUsdCents)&&item.approxUsdCents>0?` · ≈ $${(item.approxUsdCents/100).toFixed(2)} USD each`:''}</li>`).join('')}</ul>`;}catch(error){document.getElementById('orderStatusMessage').textContent=error.message;}
+}
+
+async function loadAdminDashboard(){
+  const message=document.getElementById('adminMessage');
+  try{
+    const headers={Authorization:`Bearer ${adminToken}`};
+    const [overviewResponse,ordersResponse,pricingResponse]=await Promise.all([fetch('/api/admin/overview',{headers}),fetch('/api/admin/orders',{headers}),fetch('/api/admin/pricing',{headers})]);
+    if(!overviewResponse.ok||!ordersResponse.ok||!pricingResponse.ok)throw new Error('Admin authentication failed.');
+    const [overview,orders,pricingData]=await Promise.all([overviewResponse.json(),ordersResponse.json(),pricingResponse.json()]);
+    document.getElementById('adminDashboard').hidden=false;
+    document.getElementById('adminOverview').innerHTML=`<div class="admin-row"><span>Supplier key configured</span><strong>${overview.supplierConfigured?'Yes':'No — imports skipped'}</strong></div><div class="admin-row"><span>Live payments / supplier purchases</span><strong>Disabled / Disabled</strong></div><div class="admin-row"><span>Catalogue products</span><strong>${overview.catalogue.active||0} active of ${overview.catalogue.count||0}</strong></div><div class="admin-row"><span>Fixed conversion policy</span><strong>1 USD = ₹${sanitizeHTML(overview.pricing?.usdInr||'105')} · 1 USDT ≈ 1 USD</strong></div>`;
+    document.getElementById('adminSyncRuns').innerHTML=overview.syncRuns.map(run=>`<div class="admin-row"><span>${sanitizeHTML(run.status)} · ${sanitizeHTML(run.started_at)}</span><span>${sanitizeHTML(run.error_code||`${run.imported} imported, ${run.updated} updated`)}</span></div>`).join('')||'<p>No sync attempts recorded.</p>';
+    document.getElementById('adminOrders').innerHTML=orders.orders.map(order=>`<div class="admin-row"><span>${sanitizeHTML(order.id)} · ${sanitizeHTML(order.status)}</span><span>${sanitizeHTML(order.customer_email||'No email')} · ₹${formatInr(order.total_paise/100)}</span></div>`).join('')||'<p>No orders recorded.</p>';
+    document.getElementById('pricingUsdInr').value=pricingData.pricing?.usdInr||'105';
+    document.getElementById('pricingAudit').innerHTML=pricingData.history.map(row=>`<div class="admin-row"><span>₹${sanitizeHTML(row.previousUsdInr||'—')} → ₹${sanitizeHTML(row.usdInr)} · ${sanitizeHTML(row.reason)}</span><span>${sanitizeHTML(row.changedAt)} · ${sanitizeHTML(row.changedBy)}</span></div>`).join('');
+    message.textContent='Connected. Token remains in page memory.';
+  }catch(error){adminToken='';document.getElementById('adminDashboard').hidden=true;message.textContent=error.message;}
 }
 
 // Global click handler
@@ -473,17 +525,22 @@ document.addEventListener('click', e => {
     const parent = variantBtn.closest('.detail-info');
     if (!parent) return;
     parent.querySelectorAll('.variant-chip').forEach(c => c.classList.remove('active'));
+    parent.querySelectorAll('.variant-chip').forEach(c => c.setAttribute('aria-pressed', 'false'));
     variantBtn.classList.add('active');
+    variantBtn.setAttribute('aria-pressed', 'true');
     
-    const { vprice, vpricenum, vname } = variantBtn.dataset;
+    const { vprice, vpricenum, vusd, vname } = variantBtn.dataset;
     const priceEl = parent.querySelector('#detailCurrentPrice');
     if (priceEl) priceEl.textContent = vprice;
+    const usdPriceEl=parent.querySelector('#detailUsdPrice');
+    if(usdPriceEl)usdPriceEl.textContent=`≈ $${Number(vusd).toFixed(2)} USD (approx.)`;
     
     const addBtn = parent.querySelector('#detailBuyBtn');
     if (addBtn) {
       addBtn.dataset.vname = vname;
       addBtn.dataset.vprice = vprice;
       addBtn.dataset.vpricenum = vpricenum;
+      addBtn.disabled = false;
       addBtn.innerHTML = `<span>${cartSvg} Add to Cart — ${vprice}</span>`;
     }
     return;
@@ -543,71 +600,39 @@ document.addEventListener('click', e => {
     }, 100);
   }
 
-  // Checkout: payment tab switching
-  const payTab = e.target.closest('.co-tab');
-  if (payTab) {
-    document.querySelectorAll('.co-tab').forEach(t => t.classList.remove('active'));
-    payTab.classList.add('active');
-    document.getElementById('payUpi').style.display = payTab.dataset.pay === 'upi' ? '' : 'none';
-    document.getElementById('payCrypto').style.display = payTab.dataset.pay === 'crypto' ? '' : 'none';
-    return;
+});
+
+document.addEventListener('keydown', (event) => {
+  const drawer=document.querySelector('.cart-drawer.open');if(!drawer)return;
+  if (event.key === 'Escape') { toggleCart(false); return; }
+  if (event.key === 'Tab') {
+    const focusable=[...drawer.querySelectorAll('button:not([disabled]),a[href],input:not([disabled])')];
+    const first=focusable[0];const last=focusable.at(-1);
+    if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus();}
+    else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus();}
   }
-
-  // Checkout: copy crypto address
-  const copyBtn = e.target.closest('[data-copy]');
-  if (copyBtn) {
-    const el = document.getElementById(copyBtn.dataset.copy);
-    if (el) { navigator.clipboard.writeText(el.textContent).then(() => showToast('Address copied!')); }
-    return;
-  }
-
-  // Checkout: send order to Telegram
-  const sendBtn = e.target.closest('#coSendOrder');
-  if (sendBtn) {
-
-    const hasCert = cart.some(item => item.id === 'infosys' || item.id === 'jpmorgan');
-    let certData = '';
-    if (hasCert) {
-      const cName = document.getElementById('coCertName')?.value?.trim();
-      const cGender = document.getElementById('coCertGender')?.value?.trim();
-      const cAge = document.getElementById('coCertAge')?.value?.trim();
-      const cAddr = document.getElementById('coCertAddress')?.value?.trim();
-      if (!cName || !cGender || !cAge || !cAddr) {
-        showToast('Please fill all Certificate Details!'); return;
-      }
-      certData = `\n🎓 Certificate Details:\nName: ${sanitizeHTML(cName)}\nGender: ${sanitizeHTML(cGender)}\nAge: ${sanitizeHTML(cAge)}\nAddress: ${sanitizeHTML(cAddr)}`;
-    }
-
-    const lines = resolveCartItems(cart).map(item => {
-      const variant = item.variantName ? ` (${item.variantName})` : '';
-      return `- ${item.productName}${variant} x${item.qty||1} — ₹${item.lineTotal.toLocaleString('en-IN')}`;
-    });
-    
-
-    const msg = `🛒 NEW ORDER — SoftBazzar\n━━━━━━━━━━━━━━━━━━━━\n📦 Items:\n${lines.join('\n')}\n━━━━━━━━━━━━━━━━━━━━\n💰 Total: ₹${getCartTotal().toLocaleString('en-IN')}${certData}\n\n━━━━━━━━━━━━━━━━━━━━\n📌 PLEASE PROVIDE PAYMENT DETAILS.`;
-    
-    window.open(`https://t.me/softbazzar?text=${encodeURIComponent(msg)}`, '_blank');
-    cart = []; saveCart(); updateCartBadge();
-    navigate('/');
-    showToast('Order opened in Telegram. Keep this page until the message is sent.');
-    return;
-  }
-
 });
 
 window.addEventListener('popstate', render);
 render();
+fetch('/api/catalogue').then((response) => response.ok ? response.json() : Promise.reject(new Error('catalogue unavailable'))).then((catalogue) => {
+  if (!Array.isArray(catalogue.products)) throw new Error('invalid catalogue');
+  cataloguePurchasable=Boolean(catalogue.purchasable);
+  setCatalogue(catalogue.products.map((product) => ({ ...product, variants:product.variants.map((variant)=>({...variant,priceNum:variant.priceInrPaise/100,price:`₹${(variant.priceInrPaise/100).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}`,disabled:!variant.inStock})), priceNum: product.priceInrPaise / 100, icon: Object.keys(brandIcons).find((key) => key === product.name.toLowerCase().split(/[^a-z0-9]+/)[0]), color: '#7967ef', price: `₹${(product.priceInrPaise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, inStock: product.inStock && catalogue.purchasable, features: [product.duration, product.requiresEmail ? 'Email required for delivery' : null, product.type].filter(Boolean) })));
+  productFamilies = deriveProductFamilies(products);
+  const retainedCart = normalizeStoredCart(savedCartSnapshot);
+  cart = retainedCart;
+  saveCart();
+  updateCartBadge();
+  if (Array.isArray(savedCartSnapshot) && retainedCart.length < savedCartSnapshot.length) showToast('Some saved items left the supplier catalogue.');
+  render();
+  const status=document.querySelector('#catalogueStatus');
+  if(status)status.textContent=catalogue.lastSyncAt?`${catalogue.stale?'Supplier update delayed. Last successful update: ':'Last supplier update: '}${new Date(catalogue.lastSyncAt).toLocaleString()}`:'Supplier inventory awaits validation.';
+  if (catalogue.stale) showToast('Catalogue refresh is delayed. Checkout is paused.');
+}).catch(() => showToast('Supplier catalogue is unavailable. Please try again later.'));
 
-// Spotlight and Magnetic Effect via Event Delegation
-document.body.insertAdjacentHTML('beforeend', '<div class="cursor-dot"></div><div class="cursor-ring"></div>');
-const cursorDot = document.querySelector('.cursor-dot');
-const cursorRing = document.querySelector('.cursor-ring');
-let mouseX = 0, mouseY = 0, ringX = 0, ringY = 0;
-
+// Pointer highlights and magnetic hero button.
 document.addEventListener('mousemove', e => {
-  mouseX = e.clientX; mouseY = e.clientY;
-  if(cursorDot) cursorDot.style.transform = `translate(calc(${mouseX}px - 50%), calc(${mouseY}px - 50%))`;
-
   // Spotlight for cards (Event Delegation)
   const card = e.target.closest('.product-card');
   if (card) {
@@ -635,44 +660,3 @@ document.addEventListener('mouseout', e => {
     btn.style.transform = '';
   }
 });
-
-const animateCursor = () => {
-  ringX += (mouseX - ringX) * 0.15;
-  ringY += (mouseY - ringY) * 0.15;
-  if(cursorRing) cursorRing.style.transform = `translate(calc(${ringX}px - 50%), calc(${ringY}px - 50%))`;
-  requestAnimationFrame(animateCursor);
-};
-animateCursor();
-
-// SALES TICKER FEATURE
-function initSalesTicker() {
-  const ticker = document.createElement('div');
-  ticker.className = 'sales-ticker';
-  document.body.appendChild(ticker);
-
-  const cities = ['Mumbai', 'Delhi', 'Bangalore', 'Chennai', 'Hyderabad', 'Pune', 'Kolkata', 'Ahmedabad', 'Surat', 'Lucknow'];
-  const users = ['Pavithran', 'Rahul', 'Sneha', 'Anjali', 'Arjun', 'Priya', 'Kiran', 'Amit', 'Sonia', 'Deepak'];
-  const sampleProducts = products.filter(p => !p.disabled).slice(0, 8);
-
-  const showNext = () => {
-    const user = users[Math.floor(Math.random() * users.length)];
-    const city = cities[Math.floor(Math.random() * cities.length)];
-    const product = sampleProducts[Math.floor(Math.random() * sampleProducts.length)];
-    
-    ticker.innerHTML = `
-      <div class="ticker-avatar">${user[0]}</div>
-      <div class="ticker-content">
-        <div class="ticker-user">${user} from ${city}</div>
-        <div class="ticker-action">just purchased <span>${product.name}</span></div>
-      </div>
-    `;
-    
-    ticker.classList.add('visible');
-    setTimeout(() => ticker.classList.remove('visible'), 5000);
-    setTimeout(showNext, 30000 + Math.random() * 30000);
-  };
-
-  setTimeout(showNext, 10000);
-}
-
-initSalesTicker();

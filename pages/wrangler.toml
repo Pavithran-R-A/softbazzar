@@ -1,0 +1,7 @@
+name = "softbazzar"
+pages_build_output_dir = "../dist"
+compatibility_date = "2026-10-03"
+
+[[services]]
+binding = "SOFTBAZZAR_API"
+service = "softbazzar-storefront-staging"

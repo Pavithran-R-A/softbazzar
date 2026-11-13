@@ -1,55 +1,60 @@
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { products } from '../src/data.js';
+import { priceProduct } from '../src/pricing.js';
+import { parseProducts } from '../src/supplier.js';
+import { setCatalogue } from '../src/data.js';
+import { calculateCartTotalPaise, normalizeStoredCart, resolveSelection, writeStoredCart } from '../src/cart-model.js';
 
-const mainSource = readFileSync(new URL('../src/main.js', import.meta.url), 'utf8');
-const pagesSource = readFileSync(new URL('../src/pages.js', import.meta.url), 'utf8');
-const vercel = JSON.parse(readFileSync(new URL('../vercel.json', import.meta.url), 'utf8'));
-
-test('production source contains no browser-only admin password or admin price overrides', () => {
-  assert.doesNotMatch(mainSource, /Enter Admin Password|sb_admin_auth|sb_admin_data|btoa\(/);
+test('fixed 105 conversion applies exact 25 percent markup', () => {
+  const value = priceProduct('10');
+  assert.equal(value.sellUsdt, 12.5);
+  assert.equal(value.priceInrPaise, 131250);
+  assert.equal(value.priceUsd, 12.5);
+  assert.equal(value.usdInr, '105');
+  assert.equal(priceProduct('0.01').priceInrPaise,131);
+  assert.throws(() => priceProduct('1.1234567'));
 });
 
-test('customer navigation uses real paths rather than hash application routes', () => {
-  assert.doesNotMatch(mainSource, /location\.hash|window\.location\.hash|href=["'`]#(?:checkout|privacy|terms|product\/)/);
-  assert.match(mainSource, /window\.location\.pathname|location\.pathname/);
-  assert.match(mainSource, /history\.pushState/);
+test('supplier parser prefers reseller cost and rejects duplicate IDs', () => {
+  const rows = parseProducts([{ id: 7, name: 'Example', your_cost: '10.25', price_usdt: 40, stock_quantity: 3, type: 'AI' }]);
+  assert.equal(rows[0].costUsdt, '10.25');
+  assert.equal(rows[0].stock, 3);
+  assert.throws(() => parseProducts([{ id: 1, name: 'A', your_cost: 1, stock: 1 }, { id: 1, name: 'B', your_cost: 2, stock: 2 }]), /duplicate/);
+  assert.throws(() => parseProducts([{ id: 1, name: 'A', your_cost: -3, stock: 1 }]), /invalid/);
+  assert.throws(() => parseProducts([{id:4,name:'Missing reseller cost',cost:'10',stock:1}]),/invalid/);
+  assert.throws(() => parseProducts([{id:2,name:'Unsafe image',your_cost:'1',stock:1,image_url:'http://example.test/item.jpg'}]),/unsafe image/);
+  assert.throws(() => parseProducts([{id:3,name:'Bad variant',your_cost:'1',stock:1,variants:[{id:'v',name:'V',your_cost:'-1',stock:2}]}]),/variant/);
 });
 
-test('cart storage is ID-only and recalculates totals from current catalogue data', async () => {
-  const cartModulePath = new URL('../src/cart-model.js', import.meta.url);
-  assert.ok(existsSync(cartModulePath), 'src/cart-model.js must exist');
-  const { normalizeStoredCart, calculateCartTotal } = await import(cartModulePath.href);
-  const product = products.find((entry) => entry.inStock !== false && (!entry.variants || entry.variants.some((variant) => !variant.disabled)));
-  assert.ok(product, 'catalogue needs one purchasable product');
-  const variant = product.variants?.find((entry) => !entry.disabled) ?? null;
-  const expectedUnitPrice = variant?.priceNum ?? product.priceNum;
-  const legacyTamperedRow = { id: product.id, vName: variant?.name ?? product.name, vPriceNum: 1, vPrice: '₹1', icon: 'fake', cat: 'fake', color: '#000', qty: 2 };
-  const normalized = normalizeStoredCart([legacyTamperedRow]);
-  assert.deepEqual(normalized, [{ id: product.id, variantName: variant?.name ?? null, qty: 2 }]);
-  assert.equal(calculateCartTotal(normalized), expectedUnitPrice * 2);
-  assert.doesNotMatch(JSON.stringify(normalized), /vPrice|priceNum|icon|color|cat/);
+test('cart stores supplier IDs and respects current stock', () => {
+  setCatalogue([{ id: 'fixture-1', name: 'Fixture', cat: 'Test', price: '₹10.00', priceNum: 10, priceInrPaise:1000, inStock: true, stock: 2, unlimited: false }]);
+  const normalized = normalizeStoredCart([{ id: 'fixture-1', qty: 8, priceNum: 0.01 }, { id: 'removed', qty: 1 }]);
+  assert.deepEqual(normalized, [{ id: 'fixture-1', variantName: null, qty: 2 }]);
+  assert.equal(calculateCartTotalPaise(normalized), 2000);
+  const values = new Map(); const storage = { setItem(key, value) { values.set(key, value); } };
+  assert.equal(writeStoredCart(normalized, storage), true);
+  assert.equal(values.get('sb_cart_v2'), '[{"id":"fixture-1","variantName":null,"qty":2}]');
 });
 
-test('public policy copy describes localStorage accurately rather than claiming cart cookies', () => {
-  assert.doesNotMatch(pagesSource, /essential cookies to maintain your cart session/i);
-  assert.match(pagesSource, /localStorage|local storage/i);
+test('variant products require an explicit available selection', () => {
+  setCatalogue([{ id: 'variant-product', name: 'Variant product', cat: 'Test', inStock: true, stock: 4, priceInrPaise: 5000, priceNum: 50, variants: [
+    { id: 'small', name: 'Small', inStock: true, stock: 2, priceInrPaise: 1000, priceNum: 10 },
+    { id: 'sold', name: 'Sold out', inStock: false, stock: 0, priceInrPaise: 500, priceNum: 5, disabled: true },
+  ] }]);
+  assert.equal(resolveSelection('variant-product'), null);
+  assert.equal(resolveSelection('variant-product', 'Sold out'), null);
+  assert.equal(resolveSelection('variant-product', 'Small').variantId, 'small');
 });
 
-test('Vercel config exposes only explicit app routes and baseline browser security headers', () => {
-  const serialized = JSON.stringify(vercel);
-  assert.match(serialized, /X-Content-Type-Options/);
-  assert.match(serialized, /Content-Security-Policy/);
-  assert.match(serialized, /Referrer-Policy/);
-  assert.doesNotMatch(serialized, /"source":"\/\(\.\*\)"[^}]*"destination":"\/index\.html"/);
-});
-
-test('SEO generator exists and hash fragments are not used as sitemap URLs', () => {
-  const generatorPath = new URL('../scripts/generate-seo.mjs', import.meta.url);
-  assert.ok(existsSync(generatorPath), 'scripts/generate-seo.mjs must exist');
-  if (existsSync(new URL('../public/sitemap.xml', import.meta.url))) {
-    const sitemap = readFileSync(new URL('../public/sitemap.xml', import.meta.url), 'utf8');
-    assert.doesNotMatch(sitemap, /#contact|#product|#privacy|#terms/);
-  }
+test('sensitive credentials stay worker side and features default disabled', () => {
+  const supplier = readFileSync(new URL('../src/supplier.js', import.meta.url), 'utf8');
+  const worker = readFileSync(new URL('../src/worker.js', import.meta.url), 'utf8');
+  const ui = readFileSync(new URL('../src/main.js', import.meta.url), 'utf8');
+  const config = readFileSync(new URL('../wrangler.toml', import.meta.url), 'utf8');
+  assert.match(supplier, /Authorization: `Bearer \$\{env\.AITOOLSHOP_API_KEY\}`/);
+  assert.match(config, /SUPPLIER_PURCHASES_ENABLED = "false"/);
+  assert.match(config, /YOUPI_LIVE_ENABLED = "false"/);
+  assert.match(worker, /safeEqual\(auth,env\.ADMIN_TOKEN\)/);
+  assert.doesNotMatch(ui, /supplierCostUsdt|Supplier cost:/);
 });

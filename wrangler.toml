@@ -1,0 +1,56 @@
+name = "softbazzar-storefront"
+account_id = "cdfe06b4a219190fcbd20b647b926b0e"
+main = "src/worker.js"
+compatibility_date = "2026-10-03"
+workers_dev = false
+[assets]
+directory = "./dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+run_worker_first = ["/", "/privacy", "/terms", "/checkout", "/product/*", "/api/*", "/robots.txt", "/sitemap.xml"]
+[triggers]
+crons = ["*/2 * * * *"]
+[[d1_databases]]
+binding = "DB"
+database_name = "softbazzar"
+database_id = "REPLACE_WITH_CLOUDFLARE_D1_DATABASE_ID"
+migrations_dir = "migrations"
+[vars]
+SUPPLIER_PURCHASES_ENABLED = "false"
+YOUPI_LIVE_ENABLED = "false"
+STALE_CATALOGUE_MINUTES = "10"
+
+[env.staging]
+name = "softbazzar-storefront-staging"
+workers_dev = true
+
+[env.staging.assets]
+directory = "./dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+run_worker_first = ["/", "/privacy*", "/terms*", "/checkout*", "/admin*", "/orders*", "/product/*", "/api/*", "/robots.txt", "/sitemap.xml"]
+
+[env.staging.triggers]
+# Maintenance: keep the staging Cron disabled until optimized D1 sync is qualified.
+# Restore only after an approved rollout and measured D1 quota headroom.
+crons = []
+
+[[env.staging.d1_databases]]
+binding = "DB"
+database_name = "softbazzar-staging"
+database_id = "1c071267-eb89-4ec1-b009-fbdaf3ec731e"
+migrations_dir = "migrations"
+
+[env.staging.vars]
+SUPPLIER_PURCHASES_ENABLED = "false"
+YOUPI_LIVE_ENABLED = "false"
+STALE_CATALOGUE_MINUTES = "10"
+STAGING_ENV = "true"
+
+[[env.staging.ratelimits]]
+name = "QUOTE_RATE_LIMITER"
+namespace_id = "821103208"
+
+[env.staging.ratelimits.simple]
+limit = 10
+period = 60

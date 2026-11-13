@@ -2,9 +2,9 @@ import { products } from './data.js';
 
 export const CART_STORAGE_KEY = 'sb_cart_v2';
 
-function cleanQuantity(value) {
+function cleanQuantity(value, maximum=99) {
   const quantity = Number(value);
-  return Number.isInteger(quantity) && quantity > 0 ? Math.min(quantity, 99) : 1;
+  return Number.isInteger(quantity) && quantity > 0 ? Math.min(quantity, maximum) : 1;
 }
 
 export function resolveSelection(id, variantName = null) {
@@ -17,29 +17,38 @@ export function resolveSelection(id, variantName = null) {
 
   let variant = null;
   if (availableVariants.length > 0) {
-    if (variantName) variant = availableVariants.find((entry) => entry.name === variantName) ?? null;
-    if (!variant) variant = availableVariants[0];
+    if (!variantName) return null;
+    variant = availableVariants.find((entry) => entry.name === variantName) ?? null;
+    if (!variant) return null;
   }
 
-  const priceNum = Number(variant?.priceNum ?? product.priceNum);
-  if (!Number.isFinite(priceNum) || priceNum < 0) return null;
+  const suppliedPaise=variant?.priceInrPaise??product.priceInrPaise;
+  const priceInrPaise=Number.isSafeInteger(Number(suppliedPaise))?Number(suppliedPaise):Math.round(Number(variant?.priceNum??product.priceNum)*100);
+  if(!Number.isSafeInteger(priceInrPaise)||priceInrPaise<0)return null;
+  const suppliedUsd=variant?.priceUsd??product.priceUsd;
+  const priceUsdCents=Number.isFinite(Number(suppliedUsd))&&Number(suppliedUsd)>=0?Math.round(Number(suppliedUsd)*100):null;
+  const priceNum=priceInrPaise/100;
 
   return {
     id: product.id,
+    variantId: variant?.id ?? null,
     variantName: variant?.name ?? null,
     displayName: variant?.name ?? product.name,
     productName: product.name,
     price: variant?.price ?? product.price,
     priceNum,
+    priceInrPaise,
+    priceUsdCents,
     icon: product.icon,
     cat: product.cat,
     color: product.color,
+    maxQuantity: variant ? (variant.unlimited ? 99 : Math.max(1, Number(variant.stock) || 1)) : (product.unlimited ? 99 : Math.max(1, Number(product.stock) || 1)),
   };
 }
 
 export function normalizeStoredCart(value) {
   if (!Array.isArray(value)) return [];
-  const normalized = [];
+  const normalized = new Map();
 
   for (const row of value) {
     if (!row || typeof row !== 'object' || typeof row.id !== 'string') continue;
@@ -53,25 +62,27 @@ export function normalizeStoredCart(value) {
     const selection = resolveSelection(row.id, requestedVariant);
     if (!selection) continue;
 
-    const item = { id: selection.id, variantName: selection.variantName, qty: cleanQuantity(row.qty) };
-    const existing = normalized.find((entry) => entry.id === item.id && entry.variantName === item.variantName);
-    if (existing) existing.qty = Math.min(99, existing.qty + item.qty);
-    else normalized.push(item);
+    const item = { id: selection.id, variantName: selection.variantName, ...(selection.variantId ? { variantId: selection.variantId } : {}), qty: cleanQuantity(row.qty, selection.maxQuantity) };
+    const key = `${item.id}\u0000${item.variantName ?? ''}`;
+    const existing = normalized.get(key);
+    normalized.set(key, existing ? { ...existing, qty: Math.min(99, existing.qty + item.qty) } : item);
   }
 
-  return normalized;
+  return [...normalized.values()];
 }
 
 export function resolveCartItems(items) {
   return normalizeStoredCart(items).flatMap((item) => {
     const selection = resolveSelection(item.id, item.variantName);
     if (!selection) return [];
-    return [{ ...selection, qty: item.qty, lineTotal: selection.priceNum * item.qty }];
+    const lineTotalPaise=selection.priceInrPaise*item.qty;
+    if(!Number.isSafeInteger(lineTotalPaise))return [];
+    return [{ ...selection, qty: item.qty, lineTotalPaise,lineTotalUsdCents:selection.priceUsdCents===null?null:selection.priceUsdCents*item.qty,lineTotal:lineTotalPaise/100 }];
   });
 }
 
-export function calculateCartTotal(items) {
-  return resolveCartItems(items).reduce((sum, item) => sum + item.lineTotal, 0);
+export function calculateCartTotalPaise(items) {
+  return resolveCartItems(items).reduce((sum, item) => sum + item.lineTotalPaise, 0);
 }
 
 export function readStoredCart(storage = globalThis.localStorage) {
@@ -85,5 +96,6 @@ export function readStoredCart(storage = globalThis.localStorage) {
 
 export function writeStoredCart(items, storage = globalThis.localStorage) {
   if (!storage) return;
-  storage.setItem(CART_STORAGE_KEY, JSON.stringify(normalizeStoredCart(items)));
+  try { storage.setItem(CART_STORAGE_KEY, JSON.stringify(normalizeStoredCart(items))); return true; }
+  catch { return false; }
 }

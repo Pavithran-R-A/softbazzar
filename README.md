@@ -1,19 +1,21 @@
 # SoftBazzar Storefront
 
-The customer-facing storefront for SoftBazzar, a small digital-products catalogue. This repository is focused on the web experience: browsing products, filtering the catalogue, managing a local cart, reviewing policies, and handing a customer off to the configured support/checkout channel.
+The SoftBazzar storefront and Cloudflare Worker backend. Supplier inventory is the only active catalogue source. Checkout stays disabled until payment and fulfilment reviews finish.
 
-The code is intentionally lightweight. It uses Vite and plain JavaScript rather than a large frontend framework, with product and category data kept separately from the rendering code.
+The code uses Vite and plain JavaScript. Runtime products come from the Worker API.
 
 ## What it includes
 
 - searchable product catalogue and category filters
-- product variants and stock/availability states
+- validated supplier stock and availability
 - cart state persisted in the browser
-- checkout summary and support hand-off
+- D1 catalogue, sync history, fixed pricing, and orders
+- two-minute supplier synchronization Worker
+- Fixed 1 USD to ₹105 merchant conversion
+- 25% markup on authenticated supplier `your_cost`
 - privacy and terms pages
 - responsive storefront UI
-- Vercel Analytics integration
-- small asset-processing scripts used while maintaining the catalogue
+- explicitly labelled development fixture inventory
 
 ## Development
 
@@ -30,6 +32,37 @@ Build the production site with:
 npm run build
 ```
 
+Run locally with Cloudflare bindings:
+
+```bash
+npm run cf:dev
+```
+
+Before staging, create D1 and set `database_id`.
+Apply local migrations with `wrangler d1 migrations apply softbazzar --local`.
+Set secrets with `wrangler secret put AITOOLSHOP_API_KEY` and
+`wrangler secret put ADMIN_TOKEN`. Never commit secret values.
+Pricing assumes 1 USDT is approximately 1 USD.
+The backend applies exactly 25% markup.
+Admin rate changes require a reason.
+Authorized rate changes receive immutable audit records.
+
+For isolated staging, create `softbazzar-staging` D1.
+Set its identifier under `env.staging.d1_databases`.
+Apply staging migrations before deploying the Worker.
+The staging supplier secret is owner-configured.
+Confirm names using `wrangler secret list --env staging`.
+Never print, copy, or log secret values.
+Add `ADMIN_TOKEN` only through Wrangler secrets.
+Keep YouPI credentials unset during this review.
+Deploy staging with `wrangler deploy --env staging`.
+Staging keeps payments and purchases disabled.
+Never use the production deploy command here.
+
+For rollback, inspect `wrangler deployments list --env staging`.
+Then select the verified prior staging version.
+Keep the production domain unchanged throughout staging.
+
 Preview the generated build locally:
 
 ```bash
@@ -40,14 +73,58 @@ npm run preview
 
 ```text
 src/main.js       storefront behaviour and rendering
-src/data.js       catalogue/category data
+src/data.js       brand icons and empty product seed
+src/worker.js     Cloudflare API and scheduled sync
+src/supplier.js   validated reseller API client
+src/pricing.js    fixed markup and decimal-safe conversions
+migrations/       versioned D1 schema
 src/pages.js      static policy/support page content
 src/index.css     visual system and responsive styles
 public/           static assets
 ```
 
-The repository also contains a few maintenance scripts for catalogue/assets. They are not required for normal storefront browsing.
+Existing catalogue records remain recoverable through Git history.
+Do not enable live payment or supplier purchase flags.
+The fixture in `fixtures/catalogue.dev.json` is never loaded in production.
 
-## Scope
+## Checkout qualification
 
-This repository contains the web storefront, not the full operational backend. Supplier synchronization, order processing and Telegram automation are maintained separately. Keeping those concerns separate makes the public-facing site easier to deploy and reason about.
+Public quote creation uses a Cloudflare Rate Limiting binding.
+Limits are approximate and per Cloudflare location.
+Database reservations still enforce available stock.
+Quote reservations expire after five minutes.
+Scheduled cleanup cancels expired quotes and releases stock.
+Order status requires a session-held quote capability.
+
+YouPI-PG is not a deployed dependency.
+Its upstream README limits use to experiments.
+Its package metadata declares a commercial license.
+The referenced upstream LICENSE currently returns not found.
+Commercial payment use needs written license clarification.
+Its upstream threat guidance rejects production-readiness claims.
+Payments remain disabled pending independent approval.
+
+Before launch, define refund timing and processing.
+Define delivery commitments and escalation ownership.
+Confirm product licensing and support coverage.
+Document disputes and bank reconciliation procedures.
+Obtain qualified legal and bank review.
+
+## Catalogue presentation
+
+Homepage families derive from supplier product names.
+Ambiguous multi-brand listings remain standalone offers.
+Featured order is editorial, never popularity-ranked.
+All supplier offers remain searchable on `/products`.
+Cart and quotes retain supplier product identifiers.
+Variant products require a selected available option.
+Browser regressions use mocked inventory and quotes.
+Run them with `npm run test:browser`.
+
+### Catalogue sync capacity and recovery
+
+The scheduled job polls every two minutes. It writes only changed catalogue rows, presentation rows, and stock snapshots. Each run records its lease and completion. The batch checks lease ownership before every catalogue write. A failed batch leaves the previous catalogue intact.
+
+On 2026-11-12, seven-day D1 Insights reported 156,386 writes for 78,097 product UPSERTs and 72,167 writes for 72,059 presentation UPSERTs. The old catalogue join averaged 381 rows read. These are historical observations, not optimized-production measurements. A local SQLite test of 191 identical products records two changed table rows per sync, excluding index writes. Historical sync-run insert and completion averages were two billed writes each: approximately 2,880 daily writes for 720 unchanged syncs, plus other account activity. The join suggests roughly 274,320 daily reads at 191 products, plus lock checks, cleanup and storefront queries. At 1,000 products, a simple two-row-per-product estimate is 1.44 million daily reads, plus other work. Supplier changes and indexes add writes. Confirm optimized usage with D1 Insights after authorized deployment; account-wide usage and headroom remain unmeasured.
+
+Before recovery, verify the daily quota reset and record the current Worker deployment and version. Pause the staging trigger with `crons = []` only after authorization. Deploy the reviewed Worker with the trigger paused; let the expired lease recover through the normal sync path, and inspect results without exposing credentials. Verify three imports, freshness, stock, pricing and a quote. Restore `crons = ["*/2 * * * *"]` only after qualification and authorization. For rollback, deploy the recorded prior Worker version and restore the prior trigger configuration separately. Worker rollback alone does not revert D1 data. Do not manually edit the stuck run without a separate reviewed plan.
