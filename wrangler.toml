@@ -31,7 +31,9 @@ not_found_handling = "single-page-application"
 run_worker_first = ["/", "/privacy*", "/terms*", "/checkout*", "/admin*", "/orders*", "/product/*", "/api/*", "/robots.txt", "/sitemap.xml"]
 
 [env.staging.triggers]
-crons = ["*/2 * * * *"]
+# Maintenance: keep the staging Cron disabled until optimized D1 sync is qualified.
+# Restore only after an approved rollout and measured D1 quota headroom.
+crons = []
 
 [[env.staging.d1_databases]]
 binding = "DB"
