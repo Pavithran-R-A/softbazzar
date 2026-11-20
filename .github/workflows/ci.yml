@@ -28,5 +28,11 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: Browser regressions
         run: npm run test:browser
-      - name: Production build
-        run: npm run build
+      - name: Build Cloudflare Pages staging bundle
+        run: npm run build:pages:staging
+      - name: Save tested Pages deployment bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: softbazzar-pages-dist
+          path: dist/
+          retention-days: 2
