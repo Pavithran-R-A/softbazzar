@@ -30,6 +30,7 @@ function saveCart() {
 }
 
 function addToCart(id, variantName = null) {
+  if (!cataloguePurchasable) { showToast('Checkout is paused until supplier stock is refreshed.'); return; }
   const selection = resolveSelection(id, variantName || null);
   if (!selection) return;
   const exists = cart.some(item => item.id === selection.id && item.variantName === selection.variantName);
@@ -228,7 +229,7 @@ function productCards(filter, searchQuery = '', availability = 'all', sort = 'fe
     <div class="product-pricing"><span class="product-price">${hasVariants ? 'From ' : ''}${sanitizeHTML(defaultPrice)} INR</span>${Number.isFinite(Number(defaultUsd)) ? `<span class="product-usd">≈ $${Number(defaultUsd).toFixed(2)} USD (approx.)</span>` : ''}</div>
     ${Array.isArray(p.variants)&&p.variants.length>0 ? `<div class="product-cat">${activeVariants.length?'Choose an available option':'No options currently available'}</div>` : p.unlimited ? '<div class="product-cat">Unlimited stock</div>' : Number.isInteger(p.stock) ? `<div class="product-cat">${p.stock === 0 ? 'Out of stock' : p.stock <= 3 ? `Only ${p.stock} available` : `${p.stock} available`}</div>` : ''}
     ${p.requiresEmail ? '<div class="product-cat">Email required for delivery</div>' : ''}
-    <button class="btn-buy ripple-btn" data-add="${sanitizeHTML(p.id)}" ${!p.inStock ? 'disabled' : ''}>${cartSvg} ${hasVariants?'Select Options':'Add to Cart'}</button></div></div>`;
+    <button class="btn-buy ripple-btn" data-add="${sanitizeHTML(p.id)}" ${!p.inStock || !cataloguePurchasable ? 'disabled' : ''}>${cartSvg} ${!cataloguePurchasable ? 'Checkout paused' : hasVariants ? 'Select Options' : 'Add to Cart'}</button></div></div>`;
   }).join('');
 }
 
@@ -370,7 +371,7 @@ function detailPage(id) {
         </div>
         <p class="product-source-label">Supplier-provided description</p><p class="detail-desc fade-up fade-up-delay-3">${sanitizeHTML(p.desc)}</p>
         <div class="detail-features fade-up fade-up-delay-4"><h3>Product information</h3><ul>${p.features.map(f=>`<li>${checkSvg} ${sanitizeHTML(f)}</li>`).join('')}</ul></div>
-        <button class="detail-buy-btn ripple-btn fade-up fade-up-delay-4" data-detail-add="${sanitizeHTML(p.id)}" data-vname="${sanitizeHTML(defaultName)}" data-vprice="${sanitizeHTML(defaultPrice)}" data-vpricenum="${defaultPriceNum}" id="detailBuyBtn" ${p.inStock && !hasVariants ? '' : 'disabled'}><span>${cartSvg} ${!p.inStock ? 'Unavailable' : hasVariants ? 'Select an option first' : `Add to Cart — ${sanitizeHTML(defaultPrice)}`}</span></button>
+        <button class="detail-buy-btn ripple-btn fade-up fade-up-delay-4" data-detail-add="${sanitizeHTML(p.id)}" data-vname="${sanitizeHTML(defaultName)}" data-vprice="${sanitizeHTML(defaultPrice)}" data-vpricenum="${defaultPriceNum}" id="detailBuyBtn" ${p.inStock && !hasVariants && cataloguePurchasable ? '' : 'disabled'}><span>${cartSvg} ${!p.inStock ? 'Unavailable' : !cataloguePurchasable ? 'Checkout paused' : hasVariants ? 'Select an option first' : `Add to Cart — ${sanitizeHTML(defaultPrice)}`}</span></button>
         <p class="detail-contact fade-up fade-up-delay-4">Need help? Chat with us on <a href="${TELEGRAM}" target="_blank" rel="noopener noreferrer">Telegram @softbazzar</a></p>
       </div></div></div></div>${relatedProducts.length?`<section class="section"><div class="section-inner"><h2 class="section-title">More in ${sanitizeHTML(p.cat)}</h2><div class="products-grid">${productCards(p.cat,'','available','name',3)}</div></div></section>`:''}</main>${footer()}${cartDrawer()}`;
 }
@@ -579,8 +580,8 @@ document.addEventListener('click', e => {
       addBtn.dataset.vname = vname;
       addBtn.dataset.vprice = vprice;
       addBtn.dataset.vpricenum = vpricenum;
-      addBtn.disabled = false;
-      addBtn.innerHTML = `<span>${cartSvg} Add to Cart — ${vprice}</span>`;
+      addBtn.disabled = !cataloguePurchasable;
+      addBtn.innerHTML = `<span>${cartSvg} ${cataloguePurchasable ? `Add to Cart — ${vprice}` : 'Checkout paused'}</span>`;
     }
     return;
   }
@@ -657,7 +658,7 @@ render();
 fetch('/api/catalogue').then((response) => response.ok ? response.json() : Promise.reject(new Error('catalogue unavailable'))).then((catalogue) => {
   if (!Array.isArray(catalogue.products)) throw new Error('invalid catalogue');
   cataloguePurchasable=Boolean(catalogue.purchasable);
-  setCatalogue(catalogue.products.map((product) => ({ ...product, variants:product.variants.map((variant)=>({...variant,priceNum:variant.priceInrPaise/100,price:`₹${(variant.priceInrPaise/100).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}`,disabled:!variant.inStock})), priceNum: product.priceInrPaise / 100, icon: inferFamilyIdentity(product.name)?.icon || null, color: '#7967ef', price: `₹${(product.priceInrPaise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, inStock: product.inStock && catalogue.purchasable, features: [product.duration, product.requiresEmail ? 'Email required for delivery' : null, product.type].filter(Boolean) })));
+  setCatalogue(catalogue.products.map((product) => ({ ...product, variants:product.variants.map((variant)=>({...variant,priceNum:variant.priceInrPaise/100,price:`₹${(variant.priceInrPaise/100).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}`,disabled:!variant.inStock})), priceNum: product.priceInrPaise / 100, icon: inferFamilyIdentity(product.name)?.icon || null, color: '#7967ef', price: `₹${(product.priceInrPaise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, inStock: product.inStock, features: [product.duration, product.requiresEmail ? 'Email required for delivery' : null, product.type].filter(Boolean) })));
   productFamilies = deriveProductFamilies(products);
   const retainedCart = normalizeStoredCart(savedCartSnapshot);
   cart = retainedCart;
