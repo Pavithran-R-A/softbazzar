@@ -149,3 +149,22 @@ test('layout remains inside target responsive widths', async ({ page }) => {
     expect(dimensions.document, `document overflow at ${zoom} zoom`).toBeLessThanOrEqual(dimensions.viewport + 1);
   }
 });
+
+
+test('stale supplier data remains browsable but checkout cannot be started', async ({ page }) => {
+  await page.route('**/api/catalogue', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({
+      products, count: products.length, lastSyncAt: '2026-11-13T06:02:34Z',
+      pricing: { usdInr: '105' }, stale: true, purchasable: false,
+    }),
+  }));
+  await page.goto('/');
+  await expect(page.locator('.family-card')).toHaveCount(2);
+  await expect(page.locator('.marquee-name').first()).toHaveText('ChatGPT');
+  await page.getByRole('link', { name: 'View Canva plans' }).click();
+  await expect(page.getByRole('heading', { name: 'Canva', exact: true })).toBeVisible();
+  await page.getByRole('link', { name: 'View offer' }).click();
+  await expect(page.getByRole('button', { name: 'Checkout paused' })).toBeDisabled();
+});
