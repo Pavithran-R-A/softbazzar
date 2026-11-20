@@ -141,7 +141,7 @@ function renderCartItems() {
 function getIcon(key, name = '') { return brandIcons[key] || iconForProductName(name || key || 'Product'); }
 function marqueeItems() {
   const list = featuredProductFamilies(productFamilies, 18).slice(0, 10);
-  return [...list, ...list].map(f => `<a class="marquee-item" href="/collection/${encodeURIComponent(f.slug)}" data-route><span class="marquee-icon liquid-glass">${getIcon(f.icon,f.name)}</span><span class="marquee-name">${sanitizeHTML(f.name)}</span></a>`).join('');
+  return [...list, ...list].map(f => `<div class="marquee-item" aria-hidden="true"><span class="marquee-icon liquid-glass">${getIcon(f.icon,f.name)}</span><span class="marquee-name">${sanitizeHTML(f.name)}</span></div>`).join('');
 }
 function familyCards(list = featuredProductFamilies(productFamilies, 18)) {
   if (!list.length) return '<p class="catalogue-empty">No matching products were found.</p>';
@@ -300,7 +300,7 @@ function homePage() {
   <section class="section" id="products"><div class="section-inner">
     <div class="section-badge fade-up"><span class="dot"></span> Products</div>
     <h2 class="section-title fade-up">Browse product families</h2>
-    <p class="section-subtitle fade-up" style="margin-bottom: 24px;">Featured products are curated. Browsing prices round up; checkout quotes use exact prices.</p>
+    <p class="section-subtitle fade-up" style="margin-bottom: 24px;">Featured order is curated, not popularity data. Browsing prices round up; checkout quotes use exact prices.</p>
     <p id="catalogueStatus" role="status" aria-live="polite">Loading supplier inventory…</p>
     <div class="family-grid" id="familyGrid">${familyCards()}</div>
     <a class="all-offers-link" href="/products" data-route>Browse all supplier offers</a>
