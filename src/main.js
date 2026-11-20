@@ -1,12 +1,13 @@
 import './index.css';
 import logoUrl from './assets/logo.png';
-import { brandIcons, products, categories, setCatalogue } from './data.js';
+import { brandIcons, products, setCatalogue, iconForProductName } from './data.js';
 import { calculateCartTotalPaise, normalizeStoredCart, readStoredCart, resolveCartItems, resolveSelection, writeStoredCart } from './cart-model.js';
 import { privacyPage, termsPage, TELEGRAM } from './pages.js';
 import { sanitizeHTML } from './text-security.js';
-import { deriveProductFamilies, editorialProductOrder, featuredProductFamilies, findProductFamily } from './product-families.js';
+import { deriveProductFamilies, editorialProductOrder, featuredProductFamilies, findProductFamily, inferFamilyIdentity, roundedCatalogueRupees } from './product-families.js';
 
 const formatInr = (value) => Number(value).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const formatCatalogueInr = (paise) => roundedCatalogueRupees(paise)?.toLocaleString('en-IN', { maximumFractionDigits: 0 }) ?? '—';
 const chevronSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clip-rule="evenodd"/></svg>`;
 const cartSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 002 1.61h9.72a2 2 0 002-1.61L23 6H6"/></svg>`;
 const backSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M17 10a.75.75 0 01-.75.75H5.612l4.158 3.96a.75.75 0 11-1.04 1.08l-5.5-5.25a.75.75 0 010-1.08l5.5-5.25a.75.75 0 111.04 1.08L5.612 9.25H16.25A.75.75 0 0117 10z" clip-rule="evenodd"/></svg>`;
@@ -127,7 +128,7 @@ function renderCartItems() {
   if (ft) ft.style.display = '';
   el.innerHTML = resolvedItems.map((item, i) => {
     const variantKey = item.variantName || '';
-    return `<div class="cart-item" style="animation-delay:${i*0.05}s"><div class="cart-item-icon">${brandIcons[item.icon]||''}</div><div class="cart-item-info"><div class="cart-item-name">${sanitizeHTML(item.displayName)}</div><div class="cart-item-cat">${sanitizeHTML(item.cat)}</div></div>
+    return `<div class="cart-item" style="animation-delay:${i*0.05}s"><div class="cart-item-icon">${getIcon(item.icon,item.productName)}</div><div class="cart-item-info"><div class="cart-item-name">${sanitizeHTML(item.displayName)}</div><div class="cart-item-cat">${sanitizeHTML(item.cat)}</div></div>
     <div class="cart-qty-ctrl"><button aria-label="Decrease ${sanitizeHTML(item.displayName)} quantity" class="cart-qty-btn ripple-btn" data-qty-sub="${sanitizeHTML(item.id)}" data-qty-name="${sanitizeHTML(variantKey)}">-</button><span class="cart-qty-val">${item.qty||1}</span><button aria-label="Increase ${sanitizeHTML(item.displayName)} quantity" class="cart-qty-btn ripple-btn" data-qty-add="${sanitizeHTML(item.id)}" data-qty-name="${sanitizeHTML(variantKey)}">+</button></div>
     <div class="cart-item-price"><span>₹${formatInr(item.lineTotalPaise/100)}</span>${item.lineTotalUsdCents===null?'':`<small>≈ $${(item.lineTotalUsdCents/100).toFixed(2)} USD</small>`}</div><button aria-label="Remove ${sanitizeHTML(item.displayName)}" class="cart-remove ripple-btn" data-remove-id="${sanitizeHTML(item.id)}" data-remove-name="${sanitizeHTML(variantKey)}">${trashSvg}</button></div>`;
   }).join('');
@@ -137,17 +138,37 @@ function renderCartItems() {
   if (countEl) countEl.textContent = `(${resolvedItems.reduce((sum, item) => sum + (item.qty || 1), 0)})`;
 }
 
-function getIcon(k) { return brandIcons[k] || '<span class="brand-monogram" aria-hidden="true">SB</span>'; }
-function marqueeItems() { const items = featuredProductFamilies(productFamilies, 18).slice(0, 6); return [...items, ...items].map((family) => `<div class="marquee-item"><div class="marquee-icon liquid-glass">${getIcon(family.icon)}</div><span class="marquee-name">${sanitizeHTML(family.name)}</span></div>`).join(''); }
-function familyCards() {
-  const families = featuredProductFamilies(productFamilies, 18);
-  if (!families.length) return '<p>No featured supplier families are available.</p>';
-  return families.map((family, index) => {
-    const price = family.startingPricePaise === null ? 'Price unavailable' : `From ₹${formatInr(family.startingPricePaise / 100)}`;
-    const stock = family.availableOffers ? `${family.availableOffers} available offer${family.availableOffers === 1 ? '' : 's'}` : 'Currently out of stock';
-    return `<a class="family-card fade-up fade-up-delay-${index % 4 + 1}" href="/collection/${encodeURIComponent(family.slug)}" data-route><span class="family-icon">${getIcon(family.icon)}</span><span class="family-name">${sanitizeHTML(family.name)}</span><span class="family-meta">${sanitizeHTML(stock)}</span><span class="family-price">${sanitizeHTML(price)}</span></a>`;
-  }).join('');
+function getIcon(key, name = '') { return brandIcons[key] || iconForProductName(name || key || 'Product'); }
+function marqueeItems() {
+  const list = featuredProductFamilies(productFamilies, 18).slice(0, 10);
+  return [...list, ...list].map(f => `<a class="marquee-item" href="/collection/${encodeURIComponent(f.slug)}" data-route><span class="marquee-icon liquid-glass">${getIcon(f.icon,f.name)}</span><span class="marquee-name">${sanitizeHTML(f.name)}</span></a>`).join('');
 }
+function familyCards(list = featuredProductFamilies(productFamilies, 18)) {
+  if (!list.length) return '<p class="catalogue-empty">No matching products were found.</p>';
+  return list.map((f, i) => `<a class="family-card fade-up fade-up-delay-${i%4+1}" href="/collection/${encodeURIComponent(f.slug)}" data-route aria-label="View ${sanitizeHTML(f.name)} plans">
+    <span class="family-icon">${getIcon(f.icon,f.name)}</span>
+    <span class="family-name">${sanitizeHTML(f.name)}</span>
+    <span class="family-meta">${f.availableOffers ? `${f.availableOffers} available offer${f.availableOffers===1?'':'s'}` : 'Out of stock'}</span>
+    <span class="family-price">${f.startingPricePaise === null ? 'Price unavailable' : `From ₹${formatCatalogueInr(f.startingPricePaise)}`}</span>
+    <span class="family-action">View ${f.products.length===1?'product':'plans'} ↗</span>
+  </a>`).join('');
+}
+function catalogueFamilies(filter='All', query='', availability='all', sort='featured') {
+  let list=productFamilies.filter(f => filter==='All' || f.category===filter);
+  if(availability==='available') list=list.filter(f => f.availableOffers>0);
+  const term=String(query).trim().toLowerCase();
+  if(term) list=list.filter(f => f.name.toLowerCase().includes(term) || f.products.some(p => p.name.toLowerCase().includes(term) || String(p.desc||'').toLowerCase().includes(term)));
+  if(sort==='name') list=[...list].sort((a,b)=>a.name.localeCompare(b.name,'en-US'));
+  if(sort==='price-low') list=[...list].sort((a,b)=>(a.startingPricePaise??Infinity)-(b.startingPricePaise??Infinity)||a.name.localeCompare(b.name,'en-US'));
+  if(sort==='price-high') list=[...list].sort((a,b)=>(b.startingPricePaise??-1)-(a.startingPricePaise??-1)||a.name.localeCompare(b.name,'en-US'));
+  return familyCards(list);
+}
+function chipHTML(){
+  const names=['All','AI','Design','Productivity','Developer','Entertainment','Learning','Security','Collections','Other'];
+  const available=new Set(productFamilies.map(f=>f.category));
+  return names.filter(c=>c==='All'||available.has(c)).map(c=>`<button class="chip ripple-btn ${c==='All'?'active':''}" data-cat="${c}">${c}</button>`).join('');
+}
+
 function familyPage(slug) {
   const family = findProductFamily(productFamilies, slug);
   if (!family) return `${navbar()}<main id="main-content"><section class="section-inner family-page"><h1>Product family not found</h1><a href="/products" data-route>Browse all supplier offers</a></section></main>${footer()}${cartDrawer()}`;
@@ -157,13 +178,27 @@ function familyPage(slug) {
     const pricePaise = variants.length ? Math.min(...variants.map((variant) => variant.priceInrPaise)) : product.priceInrPaise;
     const priceUsd = variants.length ? Math.min(...variants.map((variant) => variant.priceUsd)) : product.priceUsd;
     const stockText = hasVariants ? `${variants.length} available option${variants.length === 1 ? '' : 's'}` : product.unlimited ? 'Unlimited stock' : product.inStock ? `${product.stock} in stock` : 'Out of stock';
-    return `<article class="family-offer"><div><h2>${sanitizeHTML(product.name)}</h2><p>${sanitizeHTML(product.cat)} · ${sanitizeHTML(stockText)}</p>${product.duration ? `<p>${sanitizeHTML(product.duration)}</p>` : ''}</div><div class="family-offer-price"><strong>${variants.length ? 'From ' : ''}₹${formatInr(pricePaise / 100)}</strong>${Number.isFinite(Number(priceUsd)) ? `<small>≈ $${Number(priceUsd).toFixed(2)} USD (approx.)</small>` : ''}</div><a class="btn-buy ripple-btn" href="/product/${encodeURIComponent(product.id)}" data-route>${hasVariants ? 'Choose option' : 'View offer'}</a></article>`;
+    return `<article class="family-offer"><div><h2>${sanitizeHTML(product.name)}</h2><p>${sanitizeHTML(product.cat)} · ${sanitizeHTML(stockText)}</p>${product.duration ? `<p>${sanitizeHTML(product.duration)}</p>` : ''}</div><div class="family-offer-price"><strong>${variants.length ? 'From ' : ''}₹${formatCatalogueInr(pricePaise)}</strong>${Number.isFinite(Number(priceUsd)) ? `<small>≈ $${Number(priceUsd).toFixed(2)} USD (approx.)</small>` : ''}</div><a class="btn-buy ripple-btn" href="/product/${encodeURIComponent(product.id)}" data-route>${hasVariants ? 'Choose option' : 'View offer'}</a></article>`;
   }).join('');
-  return `${navbar()}<main id="main-content"><section class="section-inner family-page"><a class="detail-back" href="/products" data-route>${backSvg} All supplier offers</a><h1>${sanitizeHTML(family.name)}</h1><p>Supplier listings, prices, and stock.</p><div class="family-offers">${offers}</div></section></main>${footer()}${cartDrawer()}`;
+  return `${navbar()}<main id="main-content"><section class="section-inner family-page"><a class="detail-back" href="/products" data-route>${backSvg} All product families</a><h1>${sanitizeHTML(family.name)}</h1><p>Supplier listings, prices, and stock.</p><div class="family-offers">${offers}</div></section></main>${footer()}${cartDrawer()}`;
 }
 function productsPage() {
-  return `${navbar()}<main id="main-content"><section class="section products-page"><div class="section-inner"><a class="detail-back" href="/" data-route>${backSvg} Featured families</a><h1 class="section-title">All supplier offers</h1><p id="catalogueStatus" role="status" aria-live="polite">Loading supplier inventory…</p><p class="catalogue-ranking-note">Featured order is curated, not popularity data.</p><div class="search-container"><input type="search" id="searchInput" class="search-input" aria-label="Search supplier offers" placeholder="Search supplier offers" autocomplete="off"/></div><div class="catalogue-controls" aria-label="Catalogue filters"><label>Availability <select id="availabilityFilter"><option value="all">All offers</option><option value="available">In stock</option></select></label><label>Sort <select id="sortFilter"><option value="featured">Featured (curated)</option><option value="name">Name A–Z</option><option value="price-low">Price: low to high</option><option value="price-high">Price: high to low</option></select></label></div><div class="category-chips" id="categoryChips">${chipHTML()}</div><div class="products-grid" id="productsGrid">${productCards('All')}</div></div></section></main>${footer()}${cartDrawer()}`;
+  return `${navbar()}<main id="main-content"><section class="section products-page"><div class="section-inner">
+    <a class="detail-back" href="/" data-route>${backSvg} Featured products</a>
+    <h1 class="section-title">All product families</h1>
+    <p class="section-subtitle">Choose a product to compare its available plans in one place.</p>
+    <p id="catalogueStatus" role="status" aria-live="polite">Loading supplier inventory…</p>
+    <p class="catalogue-ranking-note">Featured order is curated, not measured popularity. Browsing prices round up to whole rupees; checkout quotes show exact calculated prices.</p>
+    <div class="search-container"><input type="search" id="searchInput" class="search-input" aria-label="Search products and plans" placeholder="Search ChatGPT, Gemini, Claude, ElevenLabs…" autocomplete="off"/></div>
+    <div class="catalogue-controls" aria-label="Catalogue filters">
+      <label>Availability <select id="availabilityFilter"><option value="all">All products</option><option value="available">Available</option></select></label>
+      <label>Sort <select id="sortFilter"><option value="featured">Featured (curated)</option><option value="name">Name A–Z</option><option value="price-low">Price: low to high</option><option value="price-high">Price: high to low</option></select></label>
+    </div>
+    <div class="category-chips" id="categoryChips">${chipHTML()}</div>
+    <div class="family-grid" id="productsGrid">${catalogueFamilies()}</div>
+  </div></section></main>${footer()}${cartDrawer()}`;
 }
+
 function productCards(filter, searchQuery = '', availability = 'all', sort = 'featured', limit = Infinity) {
   let list = filter === 'All' ? products : products.filter(p => p.cat.toLocaleLowerCase() === filter.toLocaleLowerCase());
   if(availability==='available')list=list.filter((product)=>product.inStock);
@@ -188,7 +223,7 @@ function productCards(filter, searchQuery = '', availability = 'all', sort = 'fe
     const defaultUsd = selectedVariant?.priceUsd ?? p.priceUsd;
     const hasVariants = Array.isArray(p.variants) && p.variants.length > 0;
     return `<div class="product-card fade-up fade-up-delay-${i%4+1}" data-id="${sanitizeHTML(p.id)}">
-    <div class="product-img">${p.image?`<img class="product-photo" src="${sanitizeHTML(p.image)}" alt="${sanitizeHTML(p.name)}" loading="lazy" referrerpolicy="no-referrer"/>`:''}<div class="brand-svg">${getIcon(p.icon)}</div></div>
+    <div class="product-img">${p.image?`<img class="product-photo" src="${sanitizeHTML(p.image)}" alt="${sanitizeHTML(p.name)}" loading="lazy" referrerpolicy="no-referrer"/>`:''}<div class="brand-svg">${getIcon(p.icon,p.name)}</div></div>
     <div class="product-body"><a class="product-name" href="/product/${encodeURIComponent(p.id)}" data-route>${sanitizeHTML(p.name)}</a><div class="product-cat">${sanitizeHTML(p.cat)}</div>
     <div class="product-pricing"><span class="product-price">${hasVariants ? 'From ' : ''}${sanitizeHTML(defaultPrice)} INR</span>${Number.isFinite(Number(defaultUsd)) ? `<span class="product-usd">≈ $${Number(defaultUsd).toFixed(2)} USD (approx.)</span>` : ''}</div>
     ${Array.isArray(p.variants)&&p.variants.length>0 ? `<div class="product-cat">${activeVariants.length?'Choose an available option':'No options currently available'}</div>` : p.unlimited ? '<div class="product-cat">Unlimited stock</div>' : Number.isInteger(p.stock) ? `<div class="product-cat">${p.stock === 0 ? 'Out of stock' : p.stock <= 3 ? `Only ${p.stock} available` : `${p.stock} available`}</div>` : ''}
@@ -196,7 +231,6 @@ function productCards(filter, searchQuery = '', availability = 'all', sort = 'fe
     <button class="btn-buy ripple-btn" data-add="${sanitizeHTML(p.id)}" ${!p.inStock ? 'disabled' : ''}>${cartSvg} ${hasVariants?'Select Options':'Add to Cart'}</button></div></div>`;
   }).join('');
 }
-function chipHTML() { return categories.map(c => `<button class="chip ripple-btn ${c==='All'?'active':''}" data-cat="${sanitizeHTML(c)}">${sanitizeHTML(c)}</button>`).join(''); }
 
 function navbar() {
   return `<nav class="navbar" id="navbar">
@@ -266,7 +300,7 @@ function homePage() {
   <section class="section" id="products"><div class="section-inner">
     <div class="section-badge fade-up"><span class="dot"></span> Products</div>
     <h2 class="section-title fade-up">Browse product families</h2>
-    <p class="section-subtitle fade-up" style="margin-bottom: 24px;">Featured order is curated, not popularity data.</p>
+    <p class="section-subtitle fade-up" style="margin-bottom: 24px;">Featured products are curated. Browsing prices round up; checkout quotes use exact prices.</p>
     <p id="catalogueStatus" role="status" aria-live="polite">Loading supplier inventory…</p>
     <div class="family-grid" id="familyGrid">${familyCards()}</div>
     <a class="all-offers-link" href="/products" data-route>Browse all supplier offers</a>
@@ -326,7 +360,7 @@ function detailPage(id) {
     <div class="detail-grid">
       <div class="detail-img-wrap" style="background:linear-gradient(135deg,${p.color}12,${p.color}05)">
         <div class="detail-glow" style="background:${p.color};top:50%;left:50%;"></div>
-        ${p.image?`<img class="detail-photo" src="${sanitizeHTML(p.image)}" alt="${sanitizeHTML(p.name)}" loading="lazy" referrerpolicy="no-referrer"/>`:''}<div class="brand-svg">${getIcon(p.icon)}</div></div>
+        ${p.image?`<img class="detail-photo" src="${sanitizeHTML(p.image)}" alt="${sanitizeHTML(p.name)}" loading="lazy" referrerpolicy="no-referrer"/>`:''}<div class="brand-svg">${getIcon(p.icon,p.name)}</div></div>
       <div class="detail-info">
         <h1 class="fade-up">${sanitizeHTML(p.name)}</h1><div class="detail-category fade-up fade-up-delay-1">${sanitizeHTML(p.cat)}</div>
         ${variantHtml}
@@ -394,6 +428,11 @@ function render() {
 }
 
 function initInteractions() {
+  document.querySelectorAll('.brand-mark img').forEach((img) => {
+    const fallback = () => { img.closest('.brand-mark')?.classList.add('is-fallback'); img.remove(); };
+    img.addEventListener('error', fallback, { once: true });
+    if (img.complete && img.naturalWidth === 0) fallback();
+  });
   const observer = new IntersectionObserver(entries => {
     entries.forEach(e => { if (e.isIntersecting) e.target.classList.add('visible'); });
   }, { threshold: 0.08, rootMargin: '0px 0px -40px 0px' });
@@ -426,7 +465,7 @@ function initInteractions() {
     const sort=sortFilter?.value||'featured';
     gridEl.style.opacity='0'; gridEl.style.transform='translateY(16px)';
     setTimeout(() => {
-      gridEl.innerHTML = productCards(filter, query, availability, sort);
+      gridEl.innerHTML = catalogueFamilies(filter, query, availability, sort);
       requestAnimationFrame(() => { 
         gridEl.style.transition='opacity .4s,transform .4s'; gridEl.style.opacity='1'; gridEl.style.transform='translateY(0)';
         gridEl.querySelectorAll('.fade-up').forEach(el => observer.observe(el)); 
@@ -618,7 +657,7 @@ render();
 fetch('/api/catalogue').then((response) => response.ok ? response.json() : Promise.reject(new Error('catalogue unavailable'))).then((catalogue) => {
   if (!Array.isArray(catalogue.products)) throw new Error('invalid catalogue');
   cataloguePurchasable=Boolean(catalogue.purchasable);
-  setCatalogue(catalogue.products.map((product) => ({ ...product, variants:product.variants.map((variant)=>({...variant,priceNum:variant.priceInrPaise/100,price:`₹${(variant.priceInrPaise/100).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}`,disabled:!variant.inStock})), priceNum: product.priceInrPaise / 100, icon: Object.keys(brandIcons).find((key) => key === product.name.toLowerCase().split(/[^a-z0-9]+/)[0]), color: '#7967ef', price: `₹${(product.priceInrPaise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, inStock: product.inStock && catalogue.purchasable, features: [product.duration, product.requiresEmail ? 'Email required for delivery' : null, product.type].filter(Boolean) })));
+  setCatalogue(catalogue.products.map((product) => ({ ...product, variants:product.variants.map((variant)=>({...variant,priceNum:variant.priceInrPaise/100,price:`₹${(variant.priceInrPaise/100).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}`,disabled:!variant.inStock})), priceNum: product.priceInrPaise / 100, icon: inferFamilyIdentity(product.name)?.icon || null, color: '#7967ef', price: `₹${(product.priceInrPaise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, inStock: product.inStock && catalogue.purchasable, features: [product.duration, product.requiresEmail ? 'Email required for delivery' : null, product.type].filter(Boolean) })));
   productFamilies = deriveProductFamilies(products);
   const retainedCart = normalizeStoredCart(savedCartSnapshot);
   cart = retainedCart;
