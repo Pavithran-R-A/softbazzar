@@ -51,14 +51,11 @@ test('out of stock offer cannot be added', async ({ page }) => {
 test('full catalogue defaults to editorial family priority', async ({ page }) => {
   await page.goto('/products');
   await expect(page.getByLabel('Sort')).toHaveValue('featured');
-  const names = await page.locator('.product-name').allTextContents();
-  expect(names.slice(0, 3)).toEqual([
-    'ChatGPT Business Monthly',
-    'ChatGPT Premium Annual',
-    'Canva Pro Plan',
-  ]);
+  const names = await page.locator('#productsGrid .family-name').allTextContents();
+  expect(names.slice(0, 2)).toEqual(['ChatGPT', 'Canva']);
+  expect(names.filter((name) => name === 'ChatGPT')).toHaveLength(1);
   await page.getByLabel('Sort').selectOption('name');
-  await expect(page.locator('.product-name').first()).toHaveText('Canva Pro Plan');
+  await expect(page.locator('#productsGrid .family-name').first()).toHaveText('Canva');
 });
 
 test('direct product and family routes refresh with valid assets', async ({ page }) => {
