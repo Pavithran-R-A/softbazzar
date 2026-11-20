@@ -13,7 +13,7 @@ test('groups supplier offers by unambiguous product names', () => {
   const chatgpt = findProductFamily(families, 'chatgpt');
   assert.deepEqual(chatgpt.products.map(({ id }) => id), ['b', 'a']);
   assert.equal(chatgpt.startingPricePaise, 9000);
-  assert.equal(families.find(({ products }) => products[0].id === 'c').standalone, true);
+  assert.equal(families.find(({ products }) => products[0].id === 'c').slug, 'grok-cursor');
 });
 
 test('featured families use editorial rank, not popularity', () => {
