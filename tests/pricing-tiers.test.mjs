@@ -54,4 +54,5 @@ test('rejects malformed, nonpositive, and unsafe prices', () => {
     assert.throws(() => priceProduct(cost), undefined, `cost ${cost}`);
   }
   assert.throws(() => priceProduct('1', '0'));
+  assert.throws(() => priceProduct('9999999999.999999', '10000'), RangeError);
 });
