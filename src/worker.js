@@ -36,7 +36,7 @@ async function replayQuote(env, quote, requestHash) {
     await env.DB.prepare("UPDATE orders SET status='cancelled',updated_at=? WHERE id=? AND status='quoted'").bind(new Date().toISOString(), quote.id).run();
     return json({ error: 'quote_expired' }, 410);
   }
-  return json({ orderId: quote.id, status: quote.status, totalPaise: quote.total_paise, approxUsdTotalCents: quote.approx_usd_total_cents || null, merchantUsdInr: quote.merchant_usd_inr || DEFAULT_USD_INR, expiresAt: quote.quote_expires_at });
+  return json({ orderId: quote.id, status: quote.status, currency: 'INR', totalPaise: quote.total_paise, approxUsdTotalCents: quote.approx_usd_total_cents || null, merchantUsdInr: quote.merchant_usd_inr || DEFAULT_USD_INR, expiresAt: quote.quote_expires_at });
 }
 
 export async function synchronize(env, fetchImpl = fetch) {

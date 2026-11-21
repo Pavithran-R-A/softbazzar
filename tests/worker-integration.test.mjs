@@ -4,6 +4,7 @@ import { createHmac, createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import worker, { cleanupExpiredQuotes, synchronize } from '../src/worker.js';
+import { deriveProductFamilies, roundedCatalogueRupees } from '../src/product-families.js';
 
 class SqliteStatement {
   constructor(db, sql, values = []) { this.db = db; this.sql = sql; this.values = values; }
@@ -147,6 +148,56 @@ test('catalogue preserves safe imagery and variants without exposing costs', asy
   assert.equal(publicStatus.order.items[0].approxUsdCents,250);
   assert.equal(Object.hasOwn(publicStatus.order,'customerEmail'),false);
   assert.equal(Object.hasOwn(publicStatus.order,'email'),false);
+  env.DB.sqlite.close();
+});
+
+test('two-tier prices stay consistent across catalogue, variants, details, and quotes', async () => {
+  const env = await createEnv();
+  const tiered = [{
+    id: 'tiered-offer', name: 'Tiered offer', your_cost: '0.1', stock_quantity: 10, type: 'AI',
+    variants: [
+      { id: 'below-minimum', name: 'Below minimum', your_cost: '0.095238', stock_quantity: 4 },
+      { id: 'minimum', name: 'Minimum', your_cost: '0.095239', stock_quantity: 4 },
+      { id: 'below-maximum', name: 'Below maximum', your_cost: '0.952380', stock_quantity: 4 },
+      { id: 'maximum', name: 'Maximum', your_cost: '0.952381', stock_quantity: 4 },
+    ],
+  }];
+  await synchronize(env, async () => supplierResponse(tiered));
+
+  const catalogue = await (await worker.fetch(request('/api/catalogue'), env)).json();
+  const product = catalogue.products[0];
+  assert.equal(product.priceInrPaise, 2100);
+  assert.equal(product.priceUsd, 0.2);
+  assert.deepEqual(product.variants.map(({ id, priceInrPaise }) => [id, priceInrPaise]), [
+    ['below-minimum', 1250], ['minimum', 2000], ['below-maximum', 20000], ['maximum', 12500],
+  ]);
+  const [family] = deriveProductFamilies([product]);
+  assert.equal(family.startingPricePaise, 1250);
+  assert.equal(roundedCatalogueRupees(family.startingPricePaise), 13);
+  assert.doesNotMatch(JSON.stringify(product), /markupBps|your_cost|cost_usdt|supplierCost/i);
+
+  const detail = await worker.fetch(request('/product/tiered-offer'), env);
+  const detailHtml = await detail.text();
+  assert.equal(detail.status, 200);
+  assert.match(detailHtml, /"priceCurrency":"INR","price":"21\.00"/);
+
+  const key = 'two_tier_quote_key_123456';
+  const quoteRequest = () => worker.fetch(request('/api/orders', {
+    method: 'POST',
+    headers: { Origin: 'https://softbazzar-staging.example', 'Content-Type': 'application/json', 'Idempotency-Key': key },
+    body: JSON.stringify({ items: [
+      { productId: 'tiered-offer', variantId: 'below-minimum', quantity: 1 },
+      { productId: 'tiered-offer', variantId: 'minimum', quantity: 2 },
+    ] }),
+  }), env);
+  const first = await quoteRequest();
+  assert.equal(first.status, 201);
+  const quote = await first.json();
+  assert.equal(quote.totalPaise, 5250);
+  assert.equal(quote.approxUsdTotalCents, 50);
+  const replay = await quoteRequest();
+  assert.equal(replay.status, 200);
+  assert.deepEqual(await replay.json(), quote);
   env.DB.sqlite.close();
 });
 

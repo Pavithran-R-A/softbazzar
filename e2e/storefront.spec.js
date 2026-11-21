@@ -79,6 +79,7 @@ test('direct product and family routes refresh with valid assets', async ({ page
   await expect(page.getByRole('heading', { name: 'ChatGPT Business Monthly' })).toBeVisible();
   await page.goto('/collection/chatgpt');
   await expect(page.getByRole('heading', { name: 'ChatGPT', exact: true })).toBeVisible();
+  await expect(page.getByText(/Browsing prices round up to whole rupees; checkout quotes show exact calculated prices/i)).toBeVisible();
   await expect(page.getByRole('link', { name: 'Choose option' })).toBeVisible();
   expect(browserErrors).toEqual([]);
 });
