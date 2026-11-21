@@ -12,7 +12,7 @@ The code uses Vite and plain JavaScript. Runtime products come from the Worker A
 - D1 catalogue, sync history, fixed pricing, and orders
 - two-minute supplier synchronization Worker
 - Fixed 1 USD to ₹105 merchant conversion
-- 25% markup on authenticated supplier `your_cost`
+- Tiered selling prices: 2× when supplier cost converts to ₹10.00–₹99.99; otherwise 1.25×
 - privacy and terms pages
 - responsive storefront UI
 - explicitly labelled development fixture inventory
@@ -43,7 +43,7 @@ Apply local migrations with `wrangler d1 migrations apply softbazzar --local`.
 Set secrets with `wrangler secret put AITOOLSHOP_API_KEY` and
 `wrangler secret put ADMIN_TOKEN`. Never commit secret values.
 Pricing assumes 1 USDT is approximately 1 USD.
-The backend applies exactly 25% markup.
+The backend uses 2× pricing for converted supplier costs ₹10.00 to under ₹100.00 and 1.25× pricing for all other costs. It classifies tiers using unmarked-up costs and performs paise-safe arithmetic.
 Admin rate changes require a reason.
 Authorized rate changes receive immutable audit records.
 
@@ -76,7 +76,7 @@ src/main.js       storefront behaviour and rendering
 src/data.js       brand icons and empty product seed
 src/worker.js     Cloudflare API and scheduled sync
 src/supplier.js   validated reseller API client
-src/pricing.js    fixed markup and decimal-safe conversions
+src/pricing.js    two-tier markup and decimal-safe conversions
 migrations/       versioned D1 schema
 src/pages.js      static policy/support page content
 src/index.css     visual system and responsive styles
