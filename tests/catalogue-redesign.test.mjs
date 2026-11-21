@@ -39,7 +39,8 @@ test('catalogue amounts round upward to whole rupees only for browsing', () => {
 test('every family and supplier offer has relevant visual identity, not generic SB', () => {
   for (const name of ['ChatGPT Plus', 'Canva Pro', 'Eleven Reader Ultra', 'API CODEX 10M']) {
     const mark = iconForProductName(name);
-    assert.match(mark, /brand-mark|brand-monogram/);
+    assert.match(mark, /brand-monogram/);
+    assert.doesNotMatch(mark, /cdn\.simpleicons\.org|<img/i);
     assert.doesNotMatch(mark, />SB<\/span>/);
   }
   assert.match(iconForProductName('New Independent Product'), /brand-monogram/);

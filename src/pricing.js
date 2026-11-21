@@ -1,7 +1,4 @@
 export const MARKUP_BPS = 12500;
-export const LOW_COST_MARKUP_BPS = 20000;
-export const TWO_DIGIT_COST_MIN_INR = 10;
-export const TWO_DIGIT_COST_MAX_INR = 100;
 export const DEFAULT_USD_INR = '105';
 const SCALE = 1_000_000n;
 
@@ -18,11 +15,7 @@ export function priceProduct(costUsdt,usdInr=DEFAULT_USD_INR){
   const cost=scaled(costUsdt);
   const rate=scaled(usdInr);
   if(cost<=0n||rate<=0n)throw new TypeError('Invalid product cost or merchant rate');
-  const costInrNumerator=cost*rate;
-  const isTwoDigitInrCost=costInrNumerator>=BigInt(TWO_DIGIT_COST_MIN_INR)*SCALE*SCALE
-    && costInrNumerator<BigInt(TWO_DIGIT_COST_MAX_INR)*SCALE*SCALE;
-  const markupBps=isTwoDigitInrCost?LOW_COST_MARKUP_BPS:MARKUP_BPS;
-  const usdNumerator=cost*BigInt(markupBps);
+  const usdNumerator=cost*BigInt(MARKUP_BPS);
   const priceInrPaiseExact=divideRound(usdNumerator*rate*100n,10000n*SCALE*SCALE);
   const approximateUsdCentsExact=divideRound(priceInrPaiseExact*SCALE,rate);
   const priceInrPaise=Number(priceInrPaiseExact);
@@ -35,6 +28,6 @@ export function priceProduct(costUsdt,usdInr=DEFAULT_USD_INR){
     priceUsd:approximateUsdCents/100,
     priceInrPaise,
     usdInr:String(usdInr),
-    markupBps,
+    markupBps: MARKUP_BPS,
   });
 }

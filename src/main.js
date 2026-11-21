@@ -1,10 +1,15 @@
 import './index.css';
+import '@fontsource/geist-sans/latin-400.css';
+import '@fontsource/geist-sans/latin-500.css';
+import '@fontsource/geist-sans/latin-600.css';
+import '@fontsource/geist-sans/latin-700.css';
 import logoUrl from './assets/logo.png';
 import { brandIcons, products, setCatalogue, iconForProductName } from './data.js';
 import { calculateCartTotalPaise, normalizeStoredCart, readStoredCart, resolveCartItems, resolveSelection, writeStoredCart } from './cart-model.js';
 import { privacyPage, termsPage, TELEGRAM } from './pages.js';
 import { sanitizeHTML } from './text-security.js';
 import { deriveProductFamilies, editorialProductOrder, featuredProductFamilies, findProductFamily, inferFamilyIdentity, roundedCatalogueRupees } from './product-families.js';
+import { initHeroVideo } from './hero-video.js';
 
 const formatInr = (value) => Number(value).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const formatCatalogueInr = (paise) => roundedCatalogueRupees(paise)?.toLocaleString('en-IN', { maximumFractionDigits: 0 }) ?? '—';
@@ -23,6 +28,8 @@ let cart = readStoredCart();
 let adminToken = '';
 let cataloguePurchasable=false;
 let productFamilies=[];
+let disposeHeroVideo = null;
+let activeFadeObserver = null;
 
 function saveCart() {
   cart = normalizeStoredCart(cart);
@@ -245,8 +252,8 @@ function navbar() {
     </div>
     <div class="mobile-nav" id="mobileNav" hidden><button data-scroll="products">Products</button><a href="/products" data-route>All offers</a><a href="${TELEGRAM}" target="_blank" rel="noopener noreferrer">Support @softbazzar</a><a href="/privacy" data-route>Privacy</a><a href="/terms" data-route>Terms</a></div>
     <div class="nav-right" style="display:flex;gap:10px;align-items:center;">
-      <button class="btn-signup cart-btn ripple-btn" id="cartToggle" aria-controls="cartDrawer" aria-expanded="false">${cartSvg} Cart <span class="cart-badge">${cart.reduce((total,item)=>total+item.qty,0)||''}</span></button>
-      <a class="btn-signup ripple-btn" href="${TELEGRAM}" target="_blank" rel="noopener noreferrer">${telegramSvg} Support</a>
+      <button class="btn-signup liquid-glass cart-btn ripple-btn" id="cartToggle" aria-controls="cartDrawer" aria-expanded="false">${cartSvg} Cart <span class="cart-badge">${cart.reduce((total,item)=>total+item.qty,0)||''}</span></button>
+      <a class="btn-signup liquid-glass ripple-btn" href="${TELEGRAM}" target="_blank" rel="noopener noreferrer" aria-label="Contact SoftBazzar support on Telegram">${telegramSvg}<span>Support</span></a>
     </div>
   </nav><div class="nav-divider"></div>`;
 }
@@ -289,14 +296,14 @@ function footer() {
 
 function homePage() {
   return `<main id="main-content"><div class="hero-wrapper">
-    <video class="bg-video" id="bgVideo" src="${VIDEO_URL}" muted playsinline></video><div class="blur-overlay"></div>
+    <video class="bg-video" id="bgVideo" src="${VIDEO_URL}" muted playsinline aria-hidden="true"></video><div class="blur-overlay"></div>
     <div class="content-layer">${navbar()}
       <div class="hero-content"><div class="hero-inner">
         <h1 class="hero-headline">Soft<span class="gradient-text">Bazzar</span></h1>
-        <p class="hero-subtitle">Browse digital products and current availability<br/>from our reseller catalogue.</p>
-        <button class="btn-cta ripple-btn magnetic-btn" data-scroll="products"><span>Browse Products</span></button>
+        <p class="hero-subtitle">Explore AI tools, creative software, and digital subscriptions, all in one place.</p>
+        <button class="btn-cta liquid-glass ripple-btn magnetic-btn" data-scroll="products"><span>Explore Products</span></button>
       </div></div>
-      <div class="marquee-section"><div class="marquee-container"><div class="marquee-label">Featured<br/>families</div><div class="marquee-track-wrapper"><div class="marquee-track">${marqueeItems()}</div></div></div></div>
+      <div class="marquee-section"><div class="marquee-container"><div class="marquee-label">Explore featured tools</div><div class="marquee-track-wrapper"><div class="marquee-track">${marqueeItems()}</div></div></div></div>
     </div></div>
   <section class="section" id="products"><div class="section-inner">
     <div class="section-badge fade-up"><span class="dot"></span> Products</div>
@@ -330,7 +337,7 @@ function adminPage() {
   return `${navbar()}<main id="main-content"><section class="admin-page"><div class="admin-header"><div><h1>Store operations</h1><p>Private staging diagnostics and controls.</p></div></div><div class="admin-content">
     <form id="adminLogin" class="admin-card"><label for="adminTokenInput">Admin token</label><div class="admin-auth-row"><input id="adminTokenInput" class="admin-input" type="password" autocomplete="current-password" required/><button class="btn-buy" type="submit">Connect securely</button></div><p id="adminMessage" role="status">Token stays in page memory.</p></form>
     <div id="adminDashboard" hidden><div class="admin-card"><h2>Staging health</h2><div id="adminOverview" aria-live="polite">Connect to load diagnostics.</div></div>
-    <div class="admin-card"><h2>Merchant pricing policy</h2><p>1 USDT ≈ 1 USD. After conversion, supplier costs from ₹10.00 to ₹99.99 receive 100% markup; all others receive 25%.</p><form id="pricingForm" class="admin-auth-row"><label>INR per USD <input id="pricingUsdInr" class="admin-input" inputmode="decimal" required/></label><label>Reason for authorized change <input id="pricingReason" class="admin-input" maxlength="300" minlength="5" required/></label><button class="btn-buy" type="submit">Save pricing rate</button></form><div id="pricingAudit" aria-live="polite"></div></div>
+    <div class="admin-card"><h2>Merchant pricing policy</h2><p>1 USDT ≈ 1 USD. Supplier cost receives exactly 25% markup at the merchant rate.</p><form id="pricingForm" class="admin-auth-row"><label>INR per USD <input id="pricingUsdInr" class="admin-input" inputmode="decimal" required/></label><label>Reason for authorized change <input id="pricingReason" class="admin-input" maxlength="300" minlength="5" required/></label><button class="btn-buy" type="submit">Save pricing rate</button></form><div id="pricingAudit" aria-live="polite"></div></div>
     <div class="admin-card"><h2>Recent supplier syncs</h2><div id="adminSyncRuns"></div><button id="syncNow" class="btn-buy" type="button">Run read-only sync</button></div>
     <div class="admin-card"><h2>Recent orders</h2><div id="adminOrders"></div><p>Payment and purchasing remain disabled.</p></div></div>
   </div></section></main>${footer()}`;
@@ -399,6 +406,8 @@ function decodeRouteSegment(value) {
 }
 
 function render() {
+  disposeHeroVideo?.();
+  disposeHeroVideo = null;
   const pathname = window.location.pathname.replace(/\/+$/, '') || '/';
   const app = document.querySelector('#app');
   if (pathname.startsWith('/product/')) {
@@ -429,26 +438,15 @@ function render() {
 }
 
 function initInteractions() {
-  document.querySelectorAll('.brand-mark img').forEach((img) => {
-    const fallback = () => { img.closest('.brand-mark')?.classList.add('is-fallback'); img.remove(); };
-    img.addEventListener('error', fallback, { once: true });
-    if (img.complete && img.naturalWidth === 0) fallback();
-  });
+  activeFadeObserver?.disconnect();
   const observer = new IntersectionObserver(entries => {
     entries.forEach(e => { if (e.isIntersecting) e.target.classList.add('visible'); });
   }, { threshold: 0.08, rootMargin: '0px 0px -40px 0px' });
+  activeFadeObserver = observer;
   document.querySelectorAll('.fade-up').forEach(el => observer.observe(el));
 
-  // Video
   const video = document.getElementById('bgVideo');
-  if (video) {
-    let raf = null;
-    const fade = (dir, cb) => { const t0 = performance.now(); (function step(ts) { const p = Math.min((ts-t0)/500,1); video.style.opacity = dir==='in'?p:1-p; if(p<1) raf=requestAnimationFrame(step); else if(cb) cb(); })(performance.now()); };
-    video.addEventListener('loadeddata', () => { video.play().then(()=>fade('in')).catch(()=>{video.muted=true;video.play().then(()=>fade('in'));}); });
-    video.addEventListener('timeupdate', () => { if(video.duration-video.currentTime<=0.5 && +video.style.opacity>0) fade('out'); });
-    video.addEventListener('ended', () => { if(raf) cancelAnimationFrame(raf); video.style.opacity='0'; setTimeout(()=>{video.currentTime=0;video.play().then(()=>fade('in'));},100); });
-    video.load();
-  }
+  if (video) disposeHeroVideo = initHeroVideo(video);
 
   // Category filter
   const chipsEl = document.getElementById('categoryChips');

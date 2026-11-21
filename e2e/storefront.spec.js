@@ -41,6 +41,92 @@ test('groups honest families and preserves offer-level quotes', async ({ page })
   await expect(page.locator('#quoteForm').getByText(/No payment is collected/i)).toBeVisible();
 });
 
+test('premium hero keeps its video, copy, fonts, and local marks', async ({ page }) => {
+  const externalLogoRequests = [];
+  const pageErrors = [];
+  const consoleErrors = [];
+  page.on('request', (request) => {
+    if (request.url().includes('cdn.simpleicons.org')) externalLogoRequests.push(request.url());
+  });
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  page.on('console', (message) => { if (message.type() === 'error') consoleErrors.push(message.text()); });
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: 'SoftBazzar' })).toBeVisible();
+  await expect(page.getByText('Explore AI tools, creative software, and digital subscriptions, all in one place.')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Explore Products' })).toBeVisible();
+  await expect(page.getByText('Explore featured tools', { exact: true })).toBeVisible();
+  const hero = page.locator('.hero-wrapper');
+  const video = page.locator('#bgVideo');
+  await page.locator('.nav-logo img').evaluate((image) => image.decode());
+  await expect(video).toHaveAttribute('src', 'https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260328_065045_c44942da-53c6-4804-b734-f9e07fc22e08.mp4');
+  await expect(video).toHaveAttribute('muted', '');
+  await expect(video).toHaveAttribute('playsinline', '');
+  const visual = await page.evaluate(async () => {
+    await document.fonts.ready;
+    const heroRect = document.querySelector('.hero-wrapper').getBoundingClientRect();
+    const videoStyle = getComputedStyle(document.querySelector('#bgVideo'));
+    const blurStyle = getComputedStyle(document.querySelector('.blur-overlay'));
+    const logo = document.querySelector('.nav-logo img');
+    return {
+      heroHeight: heroRect.height,
+      viewportHeight: window.innerHeight,
+      objectFit: videoStyle.objectFit,
+      blurColor: blurStyle.backgroundColor,
+      blurWidth: blurStyle.width,
+      blurHeight: blurStyle.height,
+      blurOpacity: blurStyle.opacity,
+      blurFilter: blurStyle.filter,
+      logoHeight: logo.getBoundingClientRect().height,
+      logoRatio: logo.getBoundingClientRect().width / logo.getBoundingClientRect().height,
+      naturalLogoRatio: logo.naturalWidth / logo.naturalHeight,
+      geistLoaded: document.fonts.check('400 16px "Geist Sans"'),
+      generalSansLoaded: [...document.fonts].some((font) => font.family.includes('General Sans') && font.status === 'loaded'),
+      iconImages: document.querySelectorAll('.marquee-icon img').length,
+      marqueeDuration: getComputedStyle(document.querySelector('.marquee-track')).animationDuration,
+      cartOverflow: getComputedStyle(document.querySelector('.cart-btn')).overflow,
+    };
+  });
+  expect(visual.heroHeight).toBeGreaterThanOrEqual(visual.viewportHeight);
+  expect(visual.objectFit).toBe('cover');
+  expect(visual.blurColor).toBe('rgb(3, 7, 18)');
+  expect(visual.blurWidth).toBe('984px');
+  expect(visual.blurHeight).toBe('527px');
+  expect(visual.blurOpacity).toBe('0.9');
+  expect(visual.blurFilter).toBe('blur(82px)');
+  expect(visual.logoHeight).toBeCloseTo(32, 0);
+  expect(visual.logoRatio).toBeCloseTo(visual.naturalLogoRatio, 2);
+  expect(visual.geistLoaded).toBe(true);
+  expect(visual.generalSansLoaded).toBe(true);
+  expect(visual.iconImages).toBe(0);
+  expect(visual.marqueeDuration).toBe('20s');
+  expect(visual.cartOverflow).toBe('visible');
+  expect(externalLogoRequests).toEqual([]);
+  expect(pageErrors).toEqual([]);
+  expect(consoleErrors).toEqual([]);
+  await page.getByRole('button', { name: 'Explore Products' }).focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#products')).toBeInViewport();
+});
+
+test('mobile navigation and reduced motion remain accessible', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  const menuButton = page.getByRole('button', { name: 'Open navigation menu' });
+  await menuButton.click();
+  await expect(page.getByRole('button', { name: 'Close navigation menu' })).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.getByRole('link', { name: 'Contact SoftBazzar support on Telegram' })).toHaveAttribute('href', 'https://t.me/softbazzar');
+  await page.getByRole('button', { name: 'Products', exact: true }).click();
+  await expect(page.locator('#products')).toBeInViewport();
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.reload();
+  const reduced = await page.evaluate(() => ({
+    videoPaused: document.querySelector('#bgVideo').paused,
+    marqueeAnimation: getComputedStyle(document.querySelector('.marquee-track')).animationName,
+  }));
+  expect(reduced.videoPaused).toBe(true);
+  expect(reduced.marqueeAnimation).toBe('none');
+});
+
 test('out of stock offer cannot be added', async ({ page }) => {
   await page.goto('/');
   await page.getByRole('link', { name: /ChatGPT/ }).first().click();
@@ -134,7 +220,7 @@ test('inactive quote replay preserves cart contents', async ({ page }) => {
 });
 
 test('layout remains inside target responsive widths', async ({ page }) => {
-  for (const width of [320, 375, 390, 480, 768, 1024, 1280, 1440, 1920]) {
+  for (const width of [320, 360, 375, 390, 430, 480, 768, 1024, 1280, 1440, 1920]) {
     await page.setViewportSize({ width, height: 900 });
     await page.goto('/', { waitUntil: 'domcontentloaded' });
     await expect(page.locator('#main-content')).toBeVisible();

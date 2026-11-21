@@ -1,14 +1,12 @@
 import { inferFamilyIdentity } from './product-families.js';
 
-// Brand identification icons are for product discovery, not partnership claims.
-// Popular supported marks come from Simple Icons; monograms stay usable offline.
+// Local marks avoid broken external logo requests.
 function monogram(letters) {
   return `<span class="brand-monogram" aria-hidden="true">${letters}</span>`;
 }
 
-function brandMark(iconSlug, letters) {
-  const icon = `https://cdn.simpleicons.org/${iconSlug}/ffffff`;
-  return `<span class="brand-mark" aria-hidden="true"><span class="brand-fallback">${letters}</span><img src="${icon}" alt="" loading="lazy" referrerpolicy="no-referrer" /></span>`;
+function brandMark(_iconSlug, letters) {
+  return monogram(letters);
 }
 
 export const brandIcons = {
