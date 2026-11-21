@@ -43,20 +43,20 @@ const websiteLd = {
   '@type': 'WebSite',
   name: 'SoftBazzar',
   url: `${origin}/`,
-  description: 'Premium digital tools and subscription catalogue with Telegram-assisted ordering.',
+  description: 'Browse current digital product inventory and supplier pricing.',
 };
 
 let home = replaceMeta(baseHtml, {
-  title: 'SoftBazzar — Premium AI Tools & Digital Subscriptions',
-  description: "Browse SoftBazzar's premium tools and digital subscriptions, compare MRP with current sale prices, and continue ordering through Telegram.",
+  title: 'SoftBazzar — Supplier Product Catalogue',
+  description: "Browse current SoftBazzar supplier products, stock and INR prices. Checkout is currently paused.",
   url: `${origin}/`,
   jsonLd: websiteLd,
 });
-home = replaceFallback(home, '<main><h1>SoftBazzar</h1><p>Premium tools and digital subscriptions at lower prices. Compare current sale prices and available plans.</p></main>');
+home = replaceFallback(home, '<main><h1>SoftBazzar</h1><p>Browse current supplier products and prices. Secure checkout is currently paused.</p></main>');
 await writeRoute('/', home);
 
 const legalRoutes = [
-  { route: '/privacy', title: 'Privacy Policy | SoftBazzar', description: 'Read how SoftBazzar handles browser cart storage, order information, analytics and support communications.', content: privacyPage() },
+  { route: '/privacy', title: 'Privacy Policy | SoftBazzar', description: 'Read how SoftBazzar handles browser cart storage, supplier catalogue data and support communications.', content: privacyPage() },
   { route: '/terms', title: 'Terms & Conditions | SoftBazzar', description: 'Read SoftBazzar terms covering digital products, ordering, payment, delivery, refunds and customer responsibilities.', content: termsPage() },
 ];
 for (const page of legalRoutes) {
@@ -122,18 +122,18 @@ for (const product of products.filter((entry) => entry.inStock !== false)) {
   let html = replaceMeta(baseHtml, { title, description, url, type: 'product', jsonLd });
   html = replaceFallback(
     html,
-    `<main><p>${escapeHtml(product.cat)}</p><h1>${escapeHtml(product.name)}</h1><p>${escapeHtml(product.desc || '')}</p><p>Current option from ${escapeHtml(first.price || product.price || '')}${first.mrp ? ` (MRP ${escapeHtml(first.mrp)})` : ''}.</p><p><a href="/">Back to SoftBazzar catalogue</a></p></main>`,
+    `<main><p>${escapeHtml(product.cat)}</p><h1>${escapeHtml(product.name)}</h1><p>${escapeHtml(product.desc || '')}</p><p>Current price: ${escapeHtml(first.price || product.price || '')}.</p><p><a href="/">Back to SoftBazzar catalogue</a></p></main>`,
   );
   await writeRoute(route, html);
 }
 
 let checkout = replaceMeta(baseHtml, {
   title: 'Checkout | SoftBazzar',
-  description: 'Review the products saved in your SoftBazzar cart and continue the order through Telegram.',
+  description: 'Review the products saved in your SoftBazzar cart.',
   url: `${origin}/checkout`,
   robots: 'noindex, nofollow',
 });
-checkout = replaceFallback(checkout, '<main><h1>Checkout</h1><p>Your cart is stored locally in this browser. Open the interactive site to review current catalogue-derived totals and continue the order on Telegram.</p></main>');
+checkout = replaceFallback(checkout, '<main><h1>Checkout paused</h1><p>Secure checkout is currently unavailable.</p></main>');
 await writeRoute('/checkout', checkout);
 
 const publicUrls = ['/', '/privacy', '/terms', ...products.filter((entry) => entry.inStock !== false).map((entry) => `/product/${encodeURIComponent(entry.id)}`)];

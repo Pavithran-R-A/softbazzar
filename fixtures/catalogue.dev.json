@@ -1,0 +1,18 @@
+{
+  "fixtureOnly": true,
+  "notice": "Development fixture only. This is not supplier inventory.",
+  "products": [
+    {
+      "id": "development-fixture-001",
+      "name": "[Development fixture] Example digital product",
+      "description": "Used to preview catalogue rendering without supplier credentials.",
+      "your_cost": "10.000000",
+      "stock": 3,
+      "stock_quantity": 3,
+      "is_unlimited": false,
+      "duration": "Example duration",
+      "requires_email": false,
+      "type": "Development fixture"
+    }
+  ]
+}
